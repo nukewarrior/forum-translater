@@ -1,18 +1,21 @@
 import { DEFAULT_FONTS, normalizeFonts, type FontSettings } from './fonts';
+import { activeProfile } from './profile-store';
 export type Kind = 'title' | 'body' | 'comment';
 export const TRANSLATION_THEMES = { quote: '淡灰引用', plain: '自然正文', weakening: '弱化译文', 'dividing-line': '分隔线', underline: '下划线', highlight: '柔和高亮', paper: '纸张卡片' } as const;
 export type TranslationTheme = keyof typeof TRANSLATION_THEMES;
-export interface AiProfile { baseUrl: string; apiKey: string; model: string; prompt: string; requestsPerMinute: number; tokensPerMinute: number; reasoningEffort?: 'none' | 'low'; fastMode?: boolean }
+export interface AiProfile { baseUrl: string; apiKey: string; model: string; prompt: string; requestsPerMinute: number; tokensPerMinute: number; reasoningEffort?: 'none' | 'low' | 'auto'; fastMode?: boolean; protocol?: 'responses' | 'chat-completions' }
 export interface Settings {
   fonts: FontSettings;
   xCollapseSidebar: boolean; xHideFloatingIcons: boolean; xHideRightSidebar: boolean; xHideAds: boolean;
   translationOnly: boolean; enabled: boolean; title: boolean; body: boolean; comment: boolean; vocabulary: boolean;
   before: number; after: number; provider: 'google' | 'microsoft' | 'ai'; ai: AiProfile; translationTheme: TranslationTheme;
+  profileId?: string; profileRevision?: number;
 }
-export const DEFAULTS: Settings = { fonts: DEFAULT_FONTS, xHideAds: true, xCollapseSidebar: true, xHideFloatingIcons: true, xHideRightSidebar: true, translationTheme: 'quote', translationOnly: false, enabled: true, title: true, body: true, comment: true, vocabulary: true, before: 600, after: 1200, provider: 'google', ai: { baseUrl: '', apiKey: '', model: '', prompt: '', requestsPerMinute: 30, tokensPerMinute: 0, reasoningEffort: 'low', fastMode: false } };
+export const DEFAULTS: Settings = { fonts: DEFAULT_FONTS, xHideAds: true, xCollapseSidebar: true, xHideFloatingIcons: true, xHideRightSidebar: true, translationTheme: 'quote', translationOnly: false, enabled: true, title: true, body: true, comment: true, vocabulary: true, before: 600, after: 1200, provider: 'google', ai: { baseUrl: '', apiKey: '', model: '', prompt: '', requestsPerMinute: 30, tokensPerMinute: 0, reasoningEffort: 'low', fastMode: false, protocol: 'responses' } };
 export function normalizeSettings(raw: Partial<Settings>): Settings {
   const value = { ...DEFAULTS, fonts: normalizeFonts(raw.fonts), ai: { ...DEFAULTS.ai } };
-  value.ai.reasoningEffort = raw.ai?.reasoningEffort === 'none' ? 'none' : 'low';
+  value.ai.reasoningEffort = raw.ai?.reasoningEffort === 'none' ? 'none' : raw.ai?.reasoningEffort === 'auto' ? 'auto' : 'low';
+  value.ai.protocol = raw.ai?.protocol === 'chat-completions' ? 'chat-completions' : 'responses';
   value.ai.fastMode = raw.ai?.fastMode === true;
   for (const key of ['baseUrl', 'apiKey', 'model', 'prompt'] as const) if (typeof raw.ai?.[key] === 'string') value.ai[key] = raw.ai[key].trim();
   for (const key of ['requestsPerMinute', 'tokensPerMinute'] as const) {
@@ -39,17 +42,21 @@ export function normalizeAiBaseUrl(raw: string): string {
 }
 export function validateAiProfile(ai: AiProfile): void {
   normalizeAiBaseUrl(ai.baseUrl);
-  if (!ai.apiKey.trim() || !ai.model.trim()) throw new Error('请填写 AI API Key 和模型');
+  if (!ai.model.trim()) throw new Error('请填写 AI 模型');
 }
 export function loadSettings(): Settings {
   const settings = normalizeSettings(GM_getValue<Partial<Settings>>('ft:settings:v1', {}));
-  settings.ai.apiKey = GM_getValue<string>('ft:ai-key:v1', '');
+  const profile = activeProfile();
+  settings.profileId = profile.id;
+  settings.profileRevision = profile.revision;
+  settings.provider = profile.provider;
+  settings.ai = { ...profile.ai };
   settings.translationOnly = loadTranslationOnly();
   return settings;
 }
 export function saveSettings(settings: Settings): void {
-  GM_setValue('ft:ai-key:v1', settings.ai.apiKey);
-  GM_setValue('ft:settings:v1', { ...settings, translationOnly: false, ai: { ...settings.ai, apiKey: '' } });
+  const { provider: _provider, ai: _ai, profileId: _profileId, profileRevision: _revision, ...global } = settings;
+  GM_setValue('ft:settings:v1', { ...global, translationOnly: false });
 }
 
 export function isXSite(host = location.hostname): boolean { return /(^|\.)(x|twitter)\.com$/.test(host); }
