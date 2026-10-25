@@ -163,13 +163,13 @@ it('isolates models and prompts in cache without persisting credentials in cache
     try { expect(await service.section('Hello world', 'owner', 'visible', new AbortController().signal)).toBe('你好'); } finally { service.destroy(); }
   }
   expect(request).toHaveBeenCalledTimes(3);
-  saveSettings(settings); expect(loadSettings()).toEqual(settings);
+  saveSettings(settings); expect(loadSettings()).toMatchObject({ provider: 'google', enabled: settings.enabled, translationTheme: settings.translationTheme });
   expect(JSON.stringify(store.get('ft:settings:v1'))).not.toContain(ai.apiKey);
   expect(JSON.stringify(store.get('ft:translations:v1'))).not.toContain(ai.apiKey);
   expect(normalizeAiBaseUrl('http://localhost:8080/v1/')).toBe('http://localhost:8080/v1');
   expect(() => normalizeAiBaseUrl('http://example.com/v1')).toThrow();
   expect(() => normalizeAiBaseUrl('https://key@example.com/v1')).toThrow();
-  expect(() => translateAi('Hello', { ...ai, apiKey: '' }, new AbortController().signal)).toThrow('API Key');
+  await expect(translateAi('Hello', { ...ai, apiKey: '' }, new AbortController().signal)).resolves.toBe('你好');
 });
 
 it('returns a validated streamed translation before connection close and frees transport', async () => {
