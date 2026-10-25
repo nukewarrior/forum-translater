@@ -21,9 +21,6 @@ export class AiBatcher {
     this.tasks.setForeground([...this.foregroundKeys, ...[...this.active].filter(job => this.foregroundKeys.has(job.key) && job.batch).map(job => job.batch?.key ?? '')]);
   }
   constructor(private readonly ai: AiProfile, private readonly tasks: TranslationTaskManager) {}
-  hasPendingVocabulary(key: string): boolean {
-    return [...this.active].some(job => job.key === key && !job.cancelled && !!job.onVocabulary);
-  }
   deprioritize(key: string): void {
     for (const job of this.active) if (job.key === key) {
       job.priority = 'prefetch';
@@ -51,7 +48,7 @@ export class AiBatcher {
       const job: Job = { ...section, key, priority, signal, partial, resolve, reject, cleanup: () => signal.removeEventListener('abort', abort), cancelled: false, delivered: false };
       const abort = (): void => {
         job.cancelled = true; job.cleanup(); this.active.delete(job); reject(new DOMException('已取消', 'AbortError'));
-        if (job.batch?.jobs.every(item => item.cancelled || item.delivered && !item.onVocabulary)) job.batch.controller.abort();
+        if (job.batch?.jobs.every(item => item.cancelled || item.delivered)) job.batch.controller.abort();
       };
       signal.addEventListener('abort', abort, { once: true });
       this.active.add(job); this.pending.push(job);
@@ -100,7 +97,7 @@ export class AiBatcher {
           const values = await request;
           values.forEach((value, index) => deliver(index, value, true));
         } catch (error) {
-          // Completed text remains usable even when the vocabulary tail fails.
+          // Completed text is retained if another batch member fails.
           if (jobs.some(job => !job.cancelled && !job.delivered)) throw error;
         }
       }, batch.controller.signal).catch((error: unknown) => {
