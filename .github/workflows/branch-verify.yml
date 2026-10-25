@@ -14,5 +14,7 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+      # The upstream lockfile contains platform-specific nested esbuild entries.
+      - run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
       - run: npm ci
       - run: npm run verify
