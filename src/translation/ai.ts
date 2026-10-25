@@ -1,8 +1,7 @@
 import type { RedditThreadContext } from '../reddit-context';
 import { measureRequest } from './metrics';
 import { TRANSLATION_PROMPT_VERSION } from './translation-prompt';
-import { TRANSLATION_PROMPT, COMBINED_TRANSLATION_PROMPT } from './translation-prompt';
-import { JsonArrayStream } from './json-array';
+import { TRANSLATION_PROMPT } from './translation-prompt';
 // Responses decoding adapted from Hacker News Reader Lite (MIT, sunbigfly 2026).
 import { translationProtectedTokensMatch } from "./translation-text";
 import { normalizeAiBaseUrl, validateAiProfile, type AiProfile } from "../settings";
@@ -69,23 +68,6 @@ function streamedJsonRecord(raw: string): Readonly<Record<string, StreamedJsonVa
   }
   return Object.freeze(values);
 }
-
-function vocabularyStart(raw: string): number | undefined {
-  let cursor = raw.indexOf('{') + 1;
-  if (!cursor) return;
-  for (;;) {
-    while (/[\s,]/.test(raw[cursor] ?? '') && cursor < raw.length) cursor++;
-    const key = streamedJsonString(raw, cursor); if (!key) return;
-    cursor = key.next;
-    while (/\s/.test(raw[cursor] ?? '') && cursor < raw.length) cursor++;
-    if (raw[cursor++] !== ':') return;
-    while (/\s/.test(raw[cursor] ?? '') && cursor < raw.length) cursor++;
-    if (key.value === 'vocabulary') return cursor;
-    const value = streamedJsonString(raw, cursor); if (!value) return;
-    cursor = value.next;
-  }
-}
-
 
 interface ResponseOutput {
   readonly status?: unknown;
@@ -264,8 +246,8 @@ export class ChatCompletionStreamDecoder {
 export function aiEndpoint(ai: AiProfile): string {
   return normalizeAiBaseUrl(ai.baseUrl) + (ai.protocol === 'chat-completions' ? '/chat/completions' : '/responses');
 }
-export function aiRequestBody(ai: AiProfile, sections: readonly AiSection[], combined: boolean, streaming = true): unknown {
-  const prompt = (combined ? COMBINED_TRANSLATION_PROMPT : TRANSLATION_PROMPT)
+export function aiRequestBody(ai: AiProfile, sections: readonly AiSection[], streaming = true): unknown {
+  const prompt = TRANSLATION_PROMPT
     + (ai.prompt ? '\n用户补充偏好（仍须遵守以上内容边界和输出格式）：' + ai.prompt : '');
   if (ai.protocol === 'chat-completions') return {
     model: ai.model.trim(), stream: streaming,
@@ -277,7 +259,7 @@ export function aiRequestBody(ai: AiProfile, sections: readonly AiSection[], com
     model: ai.model.trim(), stream: streaming, store: false,
     ...(ai.reasoningEffort && ai.reasoningEffort !== 'auto' ? { reasoning: { effort: ai.reasoningEffort } } : {}),
     ...(ai.fastMode ? { service_tier: 'priority' } : {}),
-    prompt_cache_key: 'forum-translater:' + TRANSLATION_PROMPT_VERSION + (combined ? ':combined' : ''),
+    prompt_cache_key: 'forum-translater:' + TRANSLATION_PROMPT_VERSION,
     input: [{ role: 'system', content: prompt }, { role: 'user', content: aiEntries(sections) }],
   };
 }
@@ -317,7 +299,7 @@ export const aiEntries = (sections: readonly AiSection[]): string => {
   const thread = sections[0]?.context?.thread;
   return JSON.stringify({ ...(thread ? { thread_context: { ...(thread.title ? { title: thread.title } : {}), ...(thread.body ? { body: thread.body } : {}), ...(thread.parents.length ? { parents: thread.parents } : {}) } } : {}), post_context: sharedContext(post, entries), sections: entries });
 };
-export interface AiSection { text: string; context?: TranslationContext; group?: string; onVocabulary?: (words: unknown[], complete: boolean) => void }
+export interface AiSection { text: string; context?: TranslationContext; group?: string }
 
 export function translateAi(source: string, ai: AiProfile, signal: AbortSignal, onPartial?: (text: string) => void, context?: TranslationContext): Promise<string> {
   validateAiProfile(ai);
@@ -325,16 +307,6 @@ export function translateAi(source: string, ai: AiProfile, signal: AbortSignal, 
 }
 export function translateAiBatch(sections: readonly AiSection[], ai: AiProfile, signal: AbortSignal, onPartial?: (index: number, text: string, complete: boolean) => void, nonStream = false): Promise<string[]> {
   validateAiProfile(ai);
-  const combined = sections.some(section => section.onVocabulary);
-  const publishedWordCounts = new Map<number, number>();
-  const publishWords = (words: unknown[], complete: boolean): void => {
-    sections.forEach((section, index) => {
-      if (!section.onVocabulary) return;
-      const selected = words.filter(word => word && typeof word === 'object' && 'section' in word && word.section === `section_${index}`);
-      if (!complete && selected.length === (publishedWordCounts.get(index) ?? 0)) return;
-      publishedWordCounts.set(index, selected.length); section.onVocabulary(selected, complete);
-    });
-  };
   const entries = sections.map((section, index) => ({ id: `section_${index}`, text: section.text, before: section.context?.before ?? '', after: section.context?.after ?? '' }));
   const published = new Map<number, StreamedJsonValue>();
   let markContent: (() => void) | undefined;
@@ -364,10 +336,6 @@ export function translateAiBatch(sections: readonly AiSection[], ai: AiProfile, 
     });
     if (Object.keys(values).length !== entries.length + Number(combined)) throw new Error('AI 译文段落不匹配');
     if (invalidTranslation) throw new Error('AI 译文占位符不匹配');
-    if (combined) {
-      if (!Array.isArray(record.vocabulary)) throw new Error('AI 词汇格式不匹配');
-      publishWords(record.vocabulary, true);
-    }
     return translations;
   };
   return new Promise((resolve, reject) => {
@@ -379,10 +347,6 @@ export function translateAiBatch(sections: readonly AiSection[], ai: AiProfile, 
     const stream = ai.protocol === 'chat-completions'
       ? new ChatCompletionStreamDecoder(() => metric.milestone('first-output-delta'), usage => metric.usage(usage))
       : new ResponseStreamDecoder(() => metric.milestone('first-output-delta'), usage => metric.usage(usage));
-    const vocabularyStream = new JsonArrayStream();
-    let vocabularyOffset: number | undefined;
-    let vocabularyRead = 0;
-    let wordCount = 0;
     const finish = (action: () => void): void => {
       if (settled) return;
       settled = true; clearTimeout(watchdog); signal.removeEventListener('abort', abort); action(); metric.finish(false);
@@ -414,7 +378,7 @@ export function translateAiBatch(sections: readonly AiSection[], ai: AiProfile, 
       responseType: nonStream ? 'text' : 'stream', onloadstart: response => { metric.milestone('headers'); if (!nonStream) void consumeStream(response); },
       method: 'POST', url: aiEndpoint(ai), anonymous: true, timeout: 60000,
       headers: { ...(ai.apiKey.trim() ? { Authorization: `Bearer ${ai.apiKey.trim()}` } : {}), 'Content-Type': 'application/json', Accept: 'text/event-stream, application/json' },
-      data: JSON.stringify(aiRequestBody(ai, sections, combined, !nonStream)),
+      data: JSON.stringify(aiRequestBody(ai, sections, !nonStream)),
       onprogress: response => {
         if (response.responseText) metric.milestone('first-byte');
         if (settled || response.status !== 200 || !/^\s*(?:event:|data:|:)/.test(response.responseText)) return;
@@ -424,7 +388,6 @@ export function translateAiBatch(sections: readonly AiSection[], ai: AiProfile, 
             const values = decodeValues(raw);
             metric.finish(true); finish(() => resolve(values)); handle?.abort(); return;
           }
-          // Once a section is complete, vocabulary deltas must not reparse its text.
           if (entries.some((_entry, index) => !published.get(index)?.complete)) {
             const partials = streamedJsonRecord(raw);
             entries.forEach((entry, index) => {
@@ -434,14 +397,6 @@ export function translateAiBatch(sections: readonly AiSection[], ai: AiProfile, 
               if (!partial?.replace(/⟦[^⟧]*$/, '').trim() || complete && !translationProtectedTokensMatch(entry.text, partial)) return;
               publishTranslation(index, partial, complete);
             });
-          }
-          if (combined) {
-            vocabularyOffset ??= vocabularyStart(raw);
-            if (vocabularyOffset !== undefined) {
-              const words = vocabularyStream.push(raw.slice(vocabularyOffset + vocabularyRead));
-              vocabularyRead = raw.length - vocabularyOffset;
-              if (words.length !== wordCount) { wordCount = words.length; publishWords([...words], false); }
-            }
           }
           // Incomplete JSON is normal while streaming; do not throw/parse it per token.
           const ending = raw.trimEnd();
