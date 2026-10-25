@@ -26,7 +26,7 @@ export interface ProfileCollection {
 
 const KEY = 'ft:profiles:v1';
 const KEY_PREFIX = 'ft:profile-key:v1:';
-const OLD_VOCABULARY_KEYS = ['ft:wordbook:v1', 'ft:vocabulary:v1'];
+const OLD_VOCABULARY_KEYS = ['ft:wordbook:v1', 'ft:vocabulary:v1', 'ft:combined-vocabulary:v1'];
 const OLD_VOCABULARY_PREFIXES = ['ft:wordbook-detail:v1:'];
 
 export function defaultAiConfig(): AiProfile {
