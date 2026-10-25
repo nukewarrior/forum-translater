@@ -1,5 +1,4 @@
 import { redditContext } from './reddit-context';
-import { mountVocabulary } from './vocabulary-ui';
 import { xParagraphs } from './x-paragraphs';
 import { XLongPosts } from './x-long-posts';
 import { isXPostBackground, isXPostBackgroundRoute, isXPostPath } from './x-post-modal';
@@ -43,7 +42,7 @@ export class RedditRuntime {
     this.settings.translationTheme = theme;
     for (const entry of this.entries.values()) for (const box of [entry.box, ...entry.inlineBoxes]) if (box) box.dataset.translationTheme = theme;
   }
-  constructor(readonly settings: Settings, readonly service: TranslationService) {
+  constructor(readonly settings: Settings, readonly service: TranslationService, readonly onProfileNavigation?: () => boolean) {
     this.translationOnly = settings.translationOnly;
     this.nearObserver = new IntersectionObserver(changes => {
       for (const change of changes) {
@@ -138,6 +137,7 @@ export class RedditRuntime {
     this.longPosts.reconcile();
     this.feed.reconcile();
     if (this.route !== location.href) {
+      if (this.onProfileNavigation?.()) return;
       const nativePostNavigation = isXSite() && document.documentElement.hasAttribute('data-ft-x-post-layout')
         && (isXPostPath(new URL(this.route, location.href).pathname) || isXPostPath(location.pathname ?? ''));
       this.tabTitle.reset();
@@ -242,20 +242,20 @@ export class RedditRuntime {
       let node: Node | undefined = snapshot;
       for (const index of plan.path) node = node?.childNodes[index];
       const protectedNodes = node instanceof Element ? translationTextPlan(node).protectedNodes.map(item => item instanceof Element ? item.outerHTML : item.textContent) : [];
-      return `paragraph:v1:${JSON.stringify([this.settings.provider, ai ? [ai.baseUrl.replace(/\/+$/, ''), ai.model, ai.prompt, TRANSLATION_PROMPT_VERSION, this.settings.vocabulary] : null, entry.identity || `node:${entry.owner}`, entry.kind, plan.text, protectedNodes])}`;
+      return `paragraph:v2:${JSON.stringify([this.settings.provider, ai ? [ai.baseUrl.replace(/\/+$/, ''), ai.model, ai.prompt, TRANSLATION_PROMPT_VERSION, ai.protocol] : null, entry.identity || `node:${entry.owner}`, entry.kind, plan.text, protectedNodes, this.settings.profileId, this.settings.profileRevision])}`;
     });
     const postContext = plans.map(item => item.text).join('\n\n').slice(0, 24000);
     const previews = new Map<number, string>();
-    const previous = entry.identity ? new Map([...this.service.cache.matching('paragraph:v1:'), ...this.completedParagraphs]) : new Map<string, string>();
+    const previous = entry.identity ? new Map([...this.service.cache.matching('paragraph:v2:'), ...this.completedParagraphs]) : new Map<string, string>();
     plans.forEach(plan => {
       const key = paragraphKeys[plan.index] ?? '';
       const cached = this.completedParagraphs.get(key) ?? (entry.identity ? this.service.cache.get(key) : undefined);
       if (cached !== undefined) { entry.completed.set(plan.index, cached); return; }
       let longest = 0;
       for (const [oldKey, value] of previous) {
-        if (!oldKey.startsWith('paragraph:v1:')) continue;
+        if (!oldKey.startsWith('paragraph:v2:')) continue;
         try {
-          const parsed: unknown = JSON.parse(oldKey.slice('paragraph:v1:'.length));
+          const parsed: unknown = JSON.parse(oldKey.slice('paragraph:v2:'.length));
           if (!Array.isArray(parsed)) continue;
           const parts: unknown[] = parsed;
           const source = parts[4];
@@ -263,7 +263,7 @@ export class RedditRuntime {
           const prefix = source.replace(/(?:\.{3}|…)\s*$/, '').trimEnd();
           if (!prefix || prefix.length <= longest || plan.text.length <= prefix.length || !plan.text.startsWith(prefix)) continue;
           parts[4] = plan.text;
-          if (`paragraph:v1:${JSON.stringify(parts)}` !== key) continue;
+          if (`paragraph:v2:${JSON.stringify(parts)}` !== key) continue;
           longest = prefix.length; previews.set(plan.index, value);
         } catch { /* Ignore malformed optional cache entries. */ }
       }
@@ -332,12 +332,6 @@ export class RedditRuntime {
     const running = new Set<number>();
     const render = (): void => {
       if (!current()) return;
-      if (entry.kind !== 'title' && this.settings.vocabulary && !entry.learning) {
-        const owner = entry.element.closest('article[data-testid="tweet"],shreddit-post,.thing.link,[data-testid="post-container"],[data-testid="search-post-with-content-preview"]');
-        const permalink = owner?.querySelector('time')?.closest('a')?.getAttribute('href') ?? owner?.getAttribute('permalink') ?? owner?.querySelector('a[href*="/comments/"]')?.getAttribute('href') ?? location.href;
-        const learningAnchor = entry.element.closest('[data-ft-long-post]')?.querySelector<HTMLElement>(':scope > [data-ft-owned="long-post-toggle"]') ?? box;
-        entry.learning = mountVocabulary(learningAnchor, postContext, new URL(permalink, location.href).href, this.service, { original: entry.element, translations: entry.inlineBoxes.length ? entry.inlineBoxes : [box] });
-      }
       if (inline) {
         for (const plan of plans) {
           const target = entry.inlineBoxes[plan.index]; const source = placements[plan.index]?.node;
