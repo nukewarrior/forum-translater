@@ -1,12 +1,10 @@
 import { createLocalFontQuery, mountFontSettings } from './font-settings';
 import { isXSite, TRANSLATION_THEMES, type TranslationTheme } from './settings';
-import { stopWordSpeech } from './vocabulary';
-import { renderWordbook } from './vocabulary-ui';
+import { mountProfileMenu, mountProfileSection } from './profile-ui';
 import { readTranslationMetrics } from './translation/metrics';
 import { OWNED } from './reddit';
-import { requestJson } from './translation/provider';
-import { normalizeAiBaseUrl, normalizeSettings, validateAiProfile, type Settings } from './settings';
-export function mountControls(read: () => Settings, save: (settings: Settings) => void, clearCache: () => void, saveCredentials?: (baseUrl: string, apiKey: string) => void): () => void {
+import { normalizeSettings, type Settings } from './settings';
+export function mountControls(read: () => Settings, save: (settings: Settings) => void, clearCache: () => void, onProfileChanged?: () => void): () => void {
   const host = document.createElement('div'); host.dataset.ftOwned = 'controls'; host.hidden = true; document.body.append(host);
   const shadow = host.attachShadow({ mode: 'open' });
   const style = document.createElement('style');
@@ -45,9 +43,7 @@ export function mountControls(read: () => Settings, save: (settings: Settings) =
   shadow.append(style);
   const queryFonts = createLocalFontQuery(document);
   let fontControls: ReturnType<typeof mountFontSettings> | undefined;
-  let disposeWordbook: (() => void) | undefined;
-  let modelRequest: AbortController | undefined;
-  let modelTimer: ReturnType<typeof setTimeout> | undefined;
+  let disposeProfiles: (() => void) | undefined;
   let previousFocus: HTMLElement | null = null;
   const dialog = document.createElement('dialog'); dialog.setAttribute('aria-label', `${isXSite() ? 'X' : 'Reddit'} 翻译设置`); shadow.append(dialog);
   const panel = document.createElement('form'); panel.className = 'panel'; panel.hidden = true; panel.setAttribute('aria-label', `${isXSite() ? 'X' : 'Reddit'} 翻译设置`); dialog.append(panel); panel.noValidate = true;
@@ -68,7 +64,7 @@ export function mountControls(read: () => Settings, save: (settings: Settings) =
       for (const [key, section] of sections) section.hidden = key !== id;
       for (const [key, tab] of tabs) { tab.setAttribute('aria-selected', String(key === id)); tab.tabIndex = key === id ? 0 : -1; }
     };
-    for (const [id, name, description] of [['api', '接口', '地址、密钥与模型'], ['scope', '翻译范围', '内容与预加载'], ['fonts', '字体', '标题、正文与预览'], ['words', '单词本', '列表管理与词典详情'], ['cache', '缓存与说明', '本地数据与隐私']] as const) {
+    for (const [id, name, description] of [['api', '翻译配置', 'Profile 与 AI 接口'], ['scope', '翻译范围', '内容与预加载'], ['fonts', '字体', '标题、正文与预览'], ['cache', '缓存与说明', '本地数据与隐私']] as const) {
       const tab = document.createElement('button'); tab.type = 'button'; tab.id = `ft-tab-${id}`; tab.setAttribute('role', 'tab'); tab.setAttribute('aria-controls', `ft-panel-${id}`);
       const strong = document.createElement('strong'); strong.textContent = name; const small = document.createElement('small'); small.textContent = description; tab.append(strong, small);
       tab.onclick = () => activate(id); nav.append(tab); tabs.set(id, tab);
@@ -102,8 +98,6 @@ export function mountControls(read: () => Settings, save: (settings: Settings) =
     for (const [value, name] of Object.entries(TRANSLATION_THEMES)) { const option = document.createElement('option'); option.value = value; option.textContent = name; theme.append(option); }
     theme.value = current.translationTheme; themeLabel.append(theme); scope.append(themeLabel);
     input('enabled', '开启本页及后续页面自动翻译', 'checkbox', current.enabled);
-    input('vocabulary', '整篇翻译完成后自动生成词汇学习（使用 AI 配置）', 'checkbox', current.vocabulary);
-    const wordbook = sections.get('words'); if (wordbook) disposeWordbook = renderWordbook(wordbook);
     for (const [key, label] of [['title', '帖子标题'], ['body', '帖子正文'], ['comment', '评论']] as const) {
       const field = input(key, isXSite() && key === 'body' ? '推文、回复与引用推文' : label, 'checkbox', current[key]);
       if (isXSite() && key !== 'body' && field.parentElement) field.parentElement.hidden = true;
@@ -116,84 +110,8 @@ export function mountControls(read: () => Settings, save: (settings: Settings) =
       input('xHideAds', '隐藏 X 信息流广告（取消勾选恢复）', 'checkbox', current.xHideAds);
       input('xHideFloatingIcons', '隐藏 X 右下角 Grok / 聊天悬浮入口（取消勾选恢复）', 'checkbox', current.xHideFloatingIcons);
     }
-    target = api;
-    const label = document.createElement('label'); label.textContent = '翻译服务';
-    const provider = document.createElement('select'); provider.name = 'provider';
-    for (const [value, name] of [['google', 'Google'], ['microsoft', 'Microsoft'], ['ai', 'AI（Responses）']]) {
-      const option = document.createElement('option'); option.value = value ?? ''; option.textContent = name ?? ''; provider.append(option);
-    }
-    provider.value = current.provider; label.append(provider); api.append(label); fields.set('provider', provider);
-    const aiFields = document.createElement('fieldset'); api.append(aiFields);
-    for (const [name, title, type] of [
-      ['baseUrl', 'AI Base URL（含 /v1，不含 /responses）', 'url'],
-      ['apiKey', 'API Key（保存在当前脚本中）', 'password'],
-      ['model', '模型名称', 'text'], ['prompt', '额外翻译要求', 'text'],
-      ['requestsPerMinute', '每分钟请求数', 'number'], ['tokensPerMinute', '每分钟估算 Token 上限（0 不限制）', 'number'],
-    ] as const) {
-      const field = input(name, title, type, String(current.ai[name]));
-      if (type === 'number') { field.min = name === 'requestsPerMinute' ? '1' : '0'; field.max = '1000000'; field.step = '1'; }
-      if (field.parentElement) aiFields.append(field.parentElement);
-      if (name === 'prompt') { const textarea = document.createElement('textarea'); textarea.name = name; textarea.value = current.ai.prompt; textarea.placeholder = '例如：保留技术术语，使用自然简洁的中文。'; field.replaceWith(textarea); fields.set(name, textarea); }
-    }
-    const originalModel = fields.get('model') as HTMLInputElement;
-    const model = document.createElement('select'); model.name = 'model'; model.required = true;
-    originalModel.replaceWith(model); fields.set('model', model);
-    const resetModels = (hint: string): void => {
-      const selected = model.value || current.ai.model;
-      model.replaceChildren();
-      const placeholder = document.createElement('option'); placeholder.value = ''; placeholder.textContent = hint; placeholder.disabled = true; model.append(placeholder);
-      if (selected) { const option = document.createElement('option'); option.value = selected; option.textContent = selected; model.append(option); }
-      model.value = selected;
-    };
-    resetModels('请先获取模型列表');
-    const effortLabel = document.createElement('label'); effortLabel.textContent = '思考深度';
-    const effort = document.createElement('select'); effort.name = 'reasoningEffort';
-    for (const [value, label] of [['none', 'none · 更快（需模型支持）'], ['low', 'low · 轻量思考']]) {
-      const option = document.createElement('option'); option.value = value ?? ''; option.textContent = label ?? ''; effort.append(option);
-    }
-    effort.value = current.ai.reasoningEffort ?? 'low'; effortLabel.append(effort); aiFields.append(effortLabel);
-    const fastLabel = document.createElement('label');
-    const fast = document.createElement('input'); fast.type = 'checkbox'; fast.name = 'fastMode'; fast.checked = current.ai.fastMode === true;
-    fastLabel.append(fast, 'Fast 模式（服务商支持时加速，可能增加费用或额度消耗）'); aiFields.append(fastLabel);
-    const modelStatus = document.createElement('p'); modelStatus.setAttribute('aria-live', 'polite'); modelStatus.id = 'ft-model-status'; model.setAttribute('aria-describedby', modelStatus.id);
-    const refresh = document.createElement('button'); refresh.type = 'button'; refresh.textContent = '刷新模型列表';
-    model.parentElement?.after(modelStatus, refresh);
-    const fetchModels = async (): Promise<void> => {
-      modelRequest?.abort(); resetModels('正在获取模型…');
-      if (provider.value !== 'ai') return;
-      const base = fields.get('baseUrl')?.value.trim() ?? ''; const key = fields.get('apiKey')?.value.trim() ?? '';
-      if (!base || !key) { resetModels('请填写地址和密钥'); modelStatus.textContent = '填写地址和密钥后自动获取模型。'; return; }
-      const controller = new AbortController(); modelRequest = controller; modelStatus.textContent = '正在获取模型…';
-      try {
-        const baseUrl = normalizeAiBaseUrl(base);
-        saveCredentials?.(baseUrl, key);
-        modelStatus.textContent = '地址与密钥已保存，正在获取模型…';
-        const data = await requestJson(`${baseUrl}/models`, controller.signal, undefined, key);
-        if (controller.signal.aborted) return;
-        const items: unknown = data && typeof data === 'object' && 'data' in data ? data.data : undefined;
-        const ids = Array.isArray(items) ? [...new Set(items.flatMap((item: unknown) => item && typeof item === 'object' && 'id' in item && typeof item.id === 'string' && item.id.trim() ? [item.id.trim()] : []))].sort() : [];
-        if (!ids.length) throw new Error('Empty model list');
-        const selected = model.value; resetModels('请选择模型');
-        for (const id of ids.slice(0, 500)) {
-          if ([...model.options].some(option => option.value === id)) continue;
-          const option = document.createElement('option'); option.value = id; option.textContent = id; model.append(option);
-        }
-        model.value = selected;
-        modelStatus.textContent = `已获取 ${ids.length} 个模型，请从下拉列表选择。`;
-      } catch (error) { if (!controller.signal.aborted) { resetModels('获取失败，请点击刷新'); modelStatus.textContent = error instanceof Error && /HTTP \d+|超时/.test(error.message) ? `模型获取失败：${error.message}` : '模型获取失败，请检查地址、密钥和油猴域名授权，再点击刷新。'; } }
-    };
-    const scheduleModels = (): void => {
-      modelRequest?.abort(); clearTimeout(modelTimer); resetModels('等待获取模型…');
-      modelTimer = setTimeout(() => { void fetchModels(); }, 500);
-    };
-    for (const name of ['baseUrl', 'apiKey']) {
-      fields.get(name)?.addEventListener('input', scheduleModels);
-      fields.get(name)?.addEventListener('change', scheduleModels);
-    }
-    refresh.onclick = () => { clearTimeout(modelTimer); void fetchModels(); };
-    const updateProvider = (): void => { aiFields.hidden = provider.value !== 'ai'; aiFields.disabled = aiFields.hidden; clearTimeout(modelTimer); void fetchModels(); };
-    provider.onchange = updateProvider; updateProvider();
-    const notice = document.createElement('p'); notice.textContent = '译文显示在原文下方。只翻译网站已加载且靠近视口的内容；匹配文本会发送至所选服务。Google / Microsoft 无需密钥；AI 使用支持 Responses 的服务，按服务商规则计费。'; cache.append(notice);
+    disposeProfiles = mountProfileSection(api, () => { onProfileChanged?.(); profileMenu.refresh(); });
+    const notice = document.createElement('p'); notice.textContent = '译文显示在原文下方，只翻译网站已加载且靠近视口的内容。AI 模型及请求数据发送至所选服务。'; cache.append(notice);
     const footer = document.createElement('footer'); panel.append(footer);
     const status = document.createElement('p'); status.setAttribute('role', 'status'); footer.append(status);
     const actions = document.createElement('div'); actions.className = 'actions'; footer.append(actions);
@@ -206,26 +124,16 @@ export function mountControls(read: () => Settings, save: (settings: Settings) =
       next.fonts = fontControls?.read() ?? current.fonts;
       next.translationTheme = theme.value as TranslationTheme;
       for (const name of ['xCollapseSidebar', 'xHideFloatingIcons', 'xHideRightSidebar', 'xHideAds'] as const) { const field = fields.get(name); if (field instanceof HTMLInputElement) next[name] = field.checked; }
-      for (const name of ['enabled', 'title', 'body', 'comment', 'translationOnly', 'vocabulary'] as const) next[name] = (fields.get(name) as HTMLInputElement).checked;
+      for (const name of ['enabled', 'title', 'body', 'comment', 'translationOnly'] as const) next[name] = (fields.get(name) as HTMLInputElement).checked;
       for (const name of ['before', 'after'] as const) next[name] = Number(fields.get(name)?.value);
-      next.provider = provider.value === 'ai' ? 'ai' : provider.value === 'microsoft' ? 'microsoft' : 'google';
-      next.ai = { ...current.ai };
-      next.ai.reasoningEffort = effort.value === 'none' ? 'none' : 'low'; next.ai.fastMode = fast.checked;
-      for (const name of ['baseUrl', 'apiKey', 'model', 'prompt'] as const) next.ai[name] = fields.get(name)?.value.trim() ?? '';
-      for (const name of ['requestsPerMinute', 'tokensPerMinute'] as const) next.ai[name] = Number(fields.get(name)?.value);
-      if (next.provider === 'ai') {
-        try { validateAiProfile(next.ai); } catch (error) { activate('api'); status.textContent = error instanceof Error ? error.message : '请检查 AI 配置'; return; }
-      }
       for (const field of fields.values()) {
-        if (!field.matches(':disabled') && !field.checkValidity()) { activate(aiFields.contains(field) || field === provider ? 'api' : 'scope'); field.reportValidity(); return; }
+        if (!field.matches(':disabled') && !field.checkValidity()) { activate('scope'); field.reportValidity(); return; }
       }
       save(normalizeSettings(next)); setOpen(false);
     };
   }
   function setOpen(open: boolean): void {
-    disposeWordbook?.(); disposeWordbook = undefined; fontControls?.destroy(); fontControls = undefined;
-    if (!open) stopWordSpeech(shadow);
-    modelRequest?.abort(); clearTimeout(modelTimer);
+    disposeProfiles?.(); disposeProfiles = undefined; fontControls?.destroy(); fontControls = undefined;
     if (open) {
       if (panel.hidden) previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       render();
@@ -235,9 +143,10 @@ export function mountControls(read: () => Settings, save: (settings: Settings) =
   }
   dialog.addEventListener('cancel', event => { event.preventDefault(); setOpen(false); });
   shadow.addEventListener('keydown', event => { if ((event as KeyboardEvent).key === 'Escape' && !panel.hidden) setOpen(false); });
+  const profileMenu = mountProfileMenu(() => { onProfileChanged?.(); if (!panel.hidden) render(); });
   const menu = GM_registerMenuCommand(`${isXSite() ? 'X' : 'Reddit'} 翻译设置`, () => setOpen(true));
   const metricsMenu = GM_registerMenuCommand('翻译性能统计（当前页面）', () => { alert(JSON.stringify(readTranslationMetrics(), null, 2)); });
   // Guard helps hot-reload owners distinguish this surface from host DOM.
   if (!host.matches(OWNED)) throw new Error('Missing UI ownership');
-  return () => { fontControls?.destroy(); disposeWordbook?.(); stopWordSpeech(shadow); modelRequest?.abort(); clearTimeout(modelTimer); if (dialog.open) dialog.close(); GM_unregisterMenuCommand(menu); GM_unregisterMenuCommand(metricsMenu); host.remove(); };
+  return () => { fontControls?.destroy(); disposeProfiles?.(); profileMenu.destroy(); if (dialog.open) dialog.close(); GM_unregisterMenuCommand(menu); GM_unregisterMenuCommand(metricsMenu); host.remove(); };
 }
