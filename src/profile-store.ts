@@ -37,7 +37,7 @@ export function defaultAiConfig(): AiProfile {
   };
 }
 
-export function makeProfile(provider: TranslationProvider, name: string, id = crypto.randomUUID()): TranslationProfile {
+export function makeProfile(provider: TranslationProvider, name: string, id: string = crypto.randomUUID()): TranslationProfile {
   return { id, name, provider, revision: 1, ai: defaultAiConfig() };
 }
 
