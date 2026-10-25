@@ -139,7 +139,7 @@ export function mountControls(read: () => Settings, save: (settings: Settings) =
       render();
     }
     panel.hidden = !open; host.hidden = !open;
-    if (open) { if (!dialog.open) dialog.showModal(); panel.querySelector<HTMLButtonElement>('header button')?.focus(); } else { dialog.close(); panel.replaceChildren(); panel.onsubmit = null; if (previousFocus?.isConnected) previousFocus.focus(); }
+    if (open) { if (!dialog.open) dialog.showModal(); panel.querySelector<HTMLButtonElement>('header button')?.focus(); } else { dialog.close(); panel.replaceChildren(); panel.onsubmit = null; profileMenu.refresh(); if (previousFocus?.isConnected) previousFocus.focus(); }
   }
   dialog.addEventListener('cancel', event => { event.preventDefault(); setOpen(false); });
   shadow.addEventListener('keydown', event => { if ((event as KeyboardEvent).key === 'Escape' && !panel.hidden) setOpen(false); });
