@@ -16,6 +16,7 @@ declare namespace GM_xmlhttpRequest { const RESPONSE_TYPE_STREAM: string | undef
 declare function GM_getValue<T>(key: string, fallback: T): T;
 declare function GM_setValue(key: string, value: unknown): void;
 declare function GM_deleteValue(key: string): void;
+declare function GM_listValues(): string[];
 declare function GM_registerMenuCommand(label: string, action: () => void): number;
 declare function GM_unregisterMenuCommand(id: number): void;
 declare const unsafeWindow: Window & typeof globalThis;
