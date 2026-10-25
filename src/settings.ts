@@ -29,6 +29,8 @@ export function normalizeSettings(raw: Partial<Settings>): Settings {
   }
   if (raw.provider === 'google' || raw.provider === 'microsoft' || raw.provider === 'ai') value.provider = raw.provider;
   if (raw.translationTheme && Object.hasOwn(TRANSLATION_THEMES, raw.translationTheme)) value.translationTheme = raw.translationTheme;
+  if (typeof raw.profileId === 'string' && raw.profileId) value.profileId = raw.profileId;
+  if (typeof raw.profileRevision === 'number' && Number.isInteger(raw.profileRevision) && raw.profileRevision > 0) value.profileRevision = raw.profileRevision;
   return value;
 }
 
