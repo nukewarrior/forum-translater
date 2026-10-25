@@ -4,7 +4,7 @@ import { aiEndpoint, aiRequestBody, ChatCompletionStreamDecoder, decodeChatCompl
 import { DEFAULTS, type AiProfile } from '../src/settings';
 
 const ai: AiProfile = { ...DEFAULTS.ai, protocol: 'chat-completions',
-  baseUrl: 'https://api.example.com/v1', model: 'test-model', apiKey: '' };
+  baseUrl: 'https://api.example.com/v1', model: 'test-model', apiKey: '', reasoningEffort: 'auto' };
 const chunk = (payload: unknown): string => 'data: ' + JSON.stringify(payload) + '\n\n';
 const completed = (text: string): string => JSON.stringify({ choices: [{ message: { content: text }, finish_reason: 'stop' }] });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
