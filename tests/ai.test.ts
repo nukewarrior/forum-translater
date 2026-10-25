@@ -75,7 +75,7 @@ it.each([
     return { abort: vi.fn() };
   });
   const partial = vi.fn();
-  await expect(translateAiBatch([{ text: 'First', onVocabulary: vi.fn() }, { text: 'Second ⟦0⟧' }], ai, new AbortController().signal, partial)).rejects.toThrow('不匹配');
+  await expect(translateAiBatch([{ text: 'First' }, { text: 'Second ⟦0⟧' }], ai, new AbortController().signal, partial)).rejects.toThrow('不匹配');
   expect(partial).toHaveBeenCalledWith(0, '已完成正文', true);
   expect(partial.mock.calls.filter(call => call[0] === 0)).toHaveLength(1);
   if (output.section_1 !== '有效 ⟦0⟧') expect(partial.mock.calls.filter(call => call[0] === 1)).toHaveLength(0);
@@ -96,14 +96,14 @@ it.each([
     sent.push(sections.map(section => section.text));
     const responseText = sent.length === 1
       ? event({ type: 'response.output_text.delta', delta: `{"section_0":"第一段 ⟦0⟧","section_1":${unfinished}` }) + event({ type: 'response.failed' })
-      : event({ type: 'response.output_text.delta', delta: '{"section_0":"第二段 ⟦1⟧","vocabulary":[]}' }) + event({ type: 'response.completed' });
+      : event({ type: 'response.output_text.delta', delta: '{"section_0":"第二段 ⟦1⟧"}' }) + event({ type: 'response.completed' });
     queueMicrotask(() => options[callback]?.({ status: 200, responseText }));
     return { abort: vi.fn() };
   });
   vi.stubGlobal('GM_xmlhttpRequest', request);
   const signal = new AbortController().signal;
-  const first = batcher.request('first', { text: 'First ⟦0⟧', onVocabulary: vi.fn() }, 'visible', signal, vi.fn());
-  const second = batcher.request('second', { text: 'Second ⟦1⟧', onVocabulary: vi.fn() }, 'visible', signal, vi.fn());
+  const first = batcher.request('first', { text: 'First ⟦0⟧' }, 'visible', signal, vi.fn());
+  const second = batcher.request('second', { text: 'Second ⟦1⟧' }, 'visible', signal, vi.fn());
   const secondResolved = vi.fn(); void second.then(secondResolved);
   await vi.advanceTimersByTimeAsync(25);
   expect(await first).toBe('第一段 ⟦0⟧');
@@ -230,26 +230,7 @@ it('measures the first visible translation instead of JSON syntax or an incomple
   expect(readTranslationMetrics().samples.at(-1)).toMatchObject({ kind: 'translation', firstContentMs: 600, durationMs: 900, success: true });
 });
 
-it('publishes each section state once while later sections and 100 vocabulary deltas arrive', async () => {
-  let options: GmRequestOptions | undefined;
-  vi.stubGlobal('GM_xmlhttpRequest', (value: GmRequestOptions) => { options = value; return { abort: vi.fn() }; });
-  const partial = vi.fn(); const vocabulary = vi.fn();
-  const promise = translateAiBatch([{ text: 'One', onVocabulary: vocabulary }, { text: 'Two' }], ai, new AbortController().signal, partial);
-  let responseText = '';
-  const push = (delta: string): void => {
-    responseText += event({ type: 'response.output_text.delta', delta });
-    options?.onprogress?.({ status: 200, responseText });
-  };
-  push('{"section_0":"一');
-  push('","section_1":"二","vocabulary":[{"section":"section_0","word":"');
-  expect(partial.mock.calls).toEqual([[0, '一', false], [0, '一', true], [1, '二', true]]);
-  for (let index = 0; index < 100; index++) push('a');
-  expect(partial).toHaveBeenCalledTimes(3);
-  push('"}]}');
-  await expect(promise).resolves.toEqual(['一', '二']);
-  expect(partial).toHaveBeenCalledTimes(3);
-  expect(vocabulary).toHaveBeenLastCalledWith([{ section: 'section_0', word: 'a'.repeat(100) }], true);
-});
+
 
 it('records first content for a validated non-streaming response', async () => {
   vi.useFakeTimers();
