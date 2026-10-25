@@ -26,6 +26,7 @@ export interface ProfileCollection {
 
 const KEY = 'ft:profiles:v1';
 const KEY_PREFIX = 'ft:profile-key:v1:';
+const LEGACY_CLEANUP_MARKER = 'ft:legacy-vocabulary-cleanup:v1';
 const OLD_VOCABULARY_KEYS = ['ft:wordbook:v1', 'ft:vocabulary:v1', 'ft:combined-vocabulary:v1'];
 const OLD_VOCABULARY_PREFIXES = ['ft:wordbook-detail:v1:'];
 
@@ -58,6 +59,7 @@ function readRaw(): StoredProfileCollection {
     if (value.version === 1 && Array.isArray(value.profiles) && value.profiles.length
       && value.profiles.every(isProfile) && typeof value.activeId === 'string'
       && value.profiles.some(profile => profile.id === value.activeId)) {
+      cleanupOldTranslationAndVocabularyData();
       return value as StoredProfileCollection;
     }
   }
@@ -72,16 +74,16 @@ function readRaw(): StoredProfileCollection {
 }
 
 function cleanupOldTranslationAndVocabularyData(): void {
+  if (GM_getValue<boolean>(LEGACY_CLEANUP_MARKER, false)) return;
   try {
     GM_deleteValue('ft:ai-key:v1');
     for (const key of OLD_VOCABULARY_KEYS) GM_deleteValue(key);
-    if (typeof GM_listValues === 'function') {
-      for (const key of GM_listValues()) {
-        if (OLD_VOCABULARY_PREFIXES.some(prefix => key.startsWith(prefix))) GM_deleteValue(key);
-      }
+    for (const key of GM_listValues()) {
+      if (OLD_VOCABULARY_PREFIXES.some(prefix => key.startsWith(prefix))) GM_deleteValue(key);
     }
+    GM_setValue(LEGACY_CLEANUP_MARKER, true);
   } catch {
-    // Cleanup is best-effort and never prevents the user from using translation.
+    // Retry after next reload if interrupted; never block translation.
   }
 }
 
