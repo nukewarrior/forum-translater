@@ -82,28 +82,9 @@ it('delivers completed sections immediately and retries only unfinished sections
   batcher.destroy(); tasks.destroy();
 });
 
-it('keeps vocabulary running after delivering text and never retranslates text after a failed tail', async () => {
-  vi.useFakeTimers(); const tasks = new TranslationTaskManager({ maxConcurrent: 4 });
-  const batcher = new AiBatcher({ ...DEFAULTS.ai, baseUrl: 'https://example.com/v1', apiKey: 'test-only', model: 'test' }, tasks);
-  let fail!: (error: Error) => void; let transportSignal!: AbortSignal;
-  const words = vi.fn();
-  vi.mocked(translateAiBatch).mockImplementation((_sections, _ai, signal, partial) => {
-    transportSignal = signal; partial?.(0, '已完成正文', true);
-    return new Promise((_resolve, reject) => { fail = reject; });
-  });
-  const result = batcher.request('a', { text: 'First', onVocabulary: words }, 'visible', new AbortController().signal, vi.fn());
-  await vi.advanceTimersByTimeAsync(25);
-  expect(await result).toBe('已完成正文');
-  expect(batcher.hasPendingVocabulary('a')).toBe(true);
-  expect(transportSignal.aborted).toBe(false);
-  fail(new Error('网络错误'));
-  await vi.advanceTimersByTimeAsync(4000);
-  expect(translateAiBatch).toHaveBeenCalledOnce();
-  expect(batcher.hasPendingVocabulary('a')).toBe(false);
-  batcher.destroy(); tasks.destroy();
-});
 
-it('retries only unfinished combined sections after a stream fails', async () => {
+
+it('retries only unfinished sections after a stream fails', async () => {
   vi.useFakeTimers(); const tasks = new TranslationTaskManager({ maxConcurrent: 4 });
   const batcher = new AiBatcher({ ...DEFAULTS.ai, baseUrl: 'https://example.com/v1', apiKey: 'test-only', model: 'test' }, tasks);
   vi.mocked(translateAiBatch).mockImplementationOnce((_sections, _ai, _signal, partial) => {
@@ -111,8 +92,8 @@ it('retries only unfinished combined sections after a stream fails', async () =>
     return Promise.reject(new Error('流读取失败'));
   }).mockResolvedValueOnce(['第二段译文']);
   const signal = new AbortController().signal;
-  const first = batcher.request('a', { text: 'First', onVocabulary: vi.fn() }, 'visible', signal, vi.fn());
-  const second = batcher.request('b', { text: 'Second', onVocabulary: vi.fn() }, 'visible', signal, vi.fn());
+  const first = batcher.request('a', { text: 'First' }, 'visible', signal, vi.fn());
+  const second = batcher.request('b', { text: 'Second' }, 'visible', signal, vi.fn());
   await vi.advanceTimersByTimeAsync(25);
   expect(await first).toBe('已完成正文');
   await vi.advanceTimersByTimeAsync(1000);
@@ -121,26 +102,7 @@ it('retries only unfinished combined sections after a stream fails', async () =>
   batcher.destroy(); tasks.destroy();
 });
 
-it('does not abort a delivered section vocabulary tail when another section is cancelled', async () => {
-  vi.useFakeTimers(); const tasks = new TranslationTaskManager({ maxConcurrent: 4 });
-  const batcher = new AiBatcher({ ...DEFAULTS.ai, baseUrl: 'https://example.com/v1', apiKey: 'test-only', model: 'test' }, tasks);
-  const words = vi.fn(); let finish!: (values: string[]) => void; let transportSignal!: AbortSignal;
-  vi.mocked(translateAiBatch).mockImplementation((_sections, _ai, signal, partial) => {
-    transportSignal = signal; partial?.(0, '第一段译文', true);
-    return new Promise(resolve => { finish = resolve; });
-  });
-  const first = batcher.request('a', { text: 'First', onVocabulary: words }, 'visible', new AbortController().signal, vi.fn());
-  const controller = new AbortController();
-  const second = batcher.request('b', { text: 'Second' }, 'visible', controller.signal, vi.fn());
-  await vi.advanceTimersByTimeAsync(25); expect(await first).toBe('第一段译文');
-  const cancelled = expect(second).rejects.toMatchObject({ name: 'AbortError' }); controller.abort(); await cancelled;
-  expect(transportSignal.aborted).toBe(false); expect(batcher.hasPendingVocabulary('a')).toBe(true);
-  vi.mocked(translateAiBatch).mock.calls[0]?.[0][0]?.onVocabulary?.([{ word: 'First' }], true);
-  finish(['第一段译文', '第二段译文']); await vi.advanceTimersByTimeAsync(0);
-  expect(words).toHaveBeenCalledWith([{ word: 'First' }], true);
-  expect(batcher.hasPendingVocabulary('a')).toBe(false);
-  batcher.destroy(); tasks.destroy();
-});
+
 
 it('groups more than six paragraphs by post and preserves paragraph order', async () => {
   vi.useFakeTimers(); const tasks = new TranslationTaskManager({ maxConcurrent: 4 });
