@@ -1,12 +1,12 @@
 // ==UserScript==
 // @name         论坛译读 · Forum Translator
 // @name:en      Forum Translator
-// @description:en Translate Reddit and X paragraph by paragraph, learn advanced vocabulary, and resize media proportionally.
+// @description:en Translate Reddit and X with multiple translation profiles, OpenAI-compatible APIs, and adjustable typography.
 // @namespace    sunbigfly/forum-translater
-// @version      0.2.11
-// @description  逐段翻译 Reddit 与 X，提取六级及以上词汇，支持流式译文、单词收藏和 X 图片视频等比缩放。
-// @homepageURL  https://github.com/sunbigfly/forum-translater
-// @supportURL   https://github.com/sunbigfly/forum-translater/issues
+// @version      0.3.0
+// @description  支持 Reddit 与 X 多翻译 Profile、流式 AI 翻译及 X 图片视频等比缩放。
+// @homepageURL  https://github.com/nukewarrior/forum-translater
+// @supportURL   https://github.com/nukewarrior/forum-translater/issues
 // @author       sunbigfly
 // @license      MIT
 // @match        https://www.reddit.com/*
@@ -20,11 +20,11 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM_deleteValue
+// @grant        GM_listValues
 // @grant        GM_registerMenuCommand
 // @grant        GM_unregisterMenuCommand
 // @connect      *
-// @connect      en.wiktionary.org
-// @connect      api.tatoeba.org
 // @connect      translate.googleapis.com
 // @connect      edge.microsoft.com
 // @connect      api-edge.cognitive.microsofttranslator.com
