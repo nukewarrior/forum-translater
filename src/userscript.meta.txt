@@ -7,6 +7,8 @@
 // @description  支持 Reddit 与 X 多翻译 Profile、流式 AI 翻译及 X 图片视频等比缩放。
 // @homepageURL  https://github.com/nukewarrior/forum-translater
 // @supportURL   https://github.com/nukewarrior/forum-translater/issues
+// @updateURL    none
+// @downloadURL  none
 // @author       sunbigfly
 // @license      MIT
 // @match        https://www.reddit.com/*
