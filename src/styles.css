@@ -18,7 +18,6 @@
 [data-ft-owned="translation"].ft-translation-title :is(h1,h2,h3){font-size:inherit;font-weight:inherit;line-height:inherit}
 
 [data-ft-duplicate]{display:none!important}
-[data-ft-word]:focus-visible{outline:1px solid currentColor;outline-offset:2px;border-radius:2px}
 /* Keep post actions together even in the wider reading column. */
 [data-ft-x-right-hidden] article[data-testid="tweet"] [role="group"]:has([data-testid="reply"]):has(:is([data-testid="like"],[data-testid="unlike"])){justify-content:flex-start!important;gap:28px;flex-wrap:wrap}
 [data-ft-x-right-hidden] article[data-testid="tweet"] [role="group"]:has([data-testid="reply"]):has(:is([data-testid="like"],[data-testid="unlike"])) > div{flex:0 0 auto!important;width:auto!important;margin-inline:0!important}
