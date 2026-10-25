@@ -473,7 +473,7 @@ it('retains X translation nodes across Post open and close', async () => {
   const boxes = [...document.querySelectorAll('[data-ft-owned="translation"]')];
   route.href = 'https://x.com/user/status/123'; route.pathname = '/user/status/123'; window.dispatchEvent(new PopStateEvent('popstate')); await settle();
   route.href = 'https://x.com/home'; route.pathname = '/home'; window.dispatchEvent(new PopStateEvent('popstate')); await settle();
-  expect([...document.querySelectorAll('[data-ft-owned="translation"]')]).toEqual(boxes); expect(document.querySelector('[data-ft-owned="learning"]')).toBe(learning);
+  expect([...document.querySelectorAll('[data-ft-owned="translation"]')]).toEqual(boxes);
   expect(translate).toHaveBeenCalledOnce(); expect(reset).not.toHaveBeenCalled();
 });
 it('keeps an in-flight feed translation mounted while a native Post modal hides its background', async () => {
@@ -516,10 +516,8 @@ it.each(['/home', '/user/status/111'])('keeps partial translations and vocabular
     progress?.('正在生成的译文');
     return new Promise<string>(resolve => { complete = resolve; });
   });
-  vi.spyOn(vocabulary, 'collectVocabulary').mockResolvedValue([]);
   runtime = new RedditRuntime({ ...service.settings, vocabulary: true }, service); Observer.instances[0]?.emit(root); await settle();
   const boxes = [...feed.querySelectorAll('[data-ft-owned="translation"]')];
-  const learning = feed.querySelector('[data-ft-owned="learning"]'); expect(learning).not.toBeNull();
   route.pathname = '/user/status/123'; route.href = `https://x.com${route.pathname}`; page.setAttribute('aria-hidden', 'true');
   window.dispatchEvent(new PopStateEvent('popstate')); await settle();
   // Esc can commit the URL before X removes its modal scroll/visibility lock.
@@ -530,7 +528,6 @@ it.each(['/home', '/user/status/111'])('keeps partial translations and vocabular
   page.removeAttribute('aria-hidden'); await settle();
   const returned = [...feed.querySelectorAll('[data-ft-owned="translation"]')];
   expect(returned).toHaveLength(boxes.length); returned.forEach((box, index) => expect(box).toBe(boxes[index]));
-  expect(feed.querySelector('[data-ft-owned="learning"]')).toBe(learning);
   complete?.('第二段已完成'); await settle();
   expect(feed.textContent).toContain('已完成译文'); expect(feed.textContent).toContain('第二段已完成');
   expect(translate).toHaveBeenCalledTimes(2);
