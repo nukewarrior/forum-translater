@@ -40,7 +40,7 @@ describe('translation gateway and cache', () => {
     const next = service.section('Hello world', 'new-node', 'visible', new AbortController().signal);
     await new Promise(resolve => setTimeout(resolve, 40));
     expect(request).toHaveBeenCalledOnce();
-    options?.onload?.({ status: 200, responseText: JSON.stringify({ output: [{ type: 'message', content: [{ type: 'output_text', text: '{"section_0":"你好世界","vocabulary":[]}' }] }] }) });
+    options?.onload?.({ status: 200, responseText: JSON.stringify({ output: [{ type: 'message', content: [{ type: 'output_text', text: '{"section_0":"你好世界"}' }] }] }) });
     await expect(next).resolves.toBe('你好世界');
     await expect(service.section('Hello world', 'third-node', 'visible', new AbortController().signal)).resolves.toBe('你好世界');
     expect(request).toHaveBeenCalledOnce(); expect(partial).not.toHaveBeenCalled();
