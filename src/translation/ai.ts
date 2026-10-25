@@ -334,7 +334,7 @@ export function translateAiBatch(sections: readonly AiSection[], ai: AiProfile, 
       publishTranslation(index, value, true);
       return value;
     });
-    if (Object.keys(values).length !== entries.length + Number(combined)) throw new Error('AI 译文段落不匹配');
+    if (Object.keys(values).length !== entries.length) throw new Error('AI 译文段落不匹配');
     if (invalidTranslation) throw new Error('AI 译文占位符不匹配');
     return translations;
   };
