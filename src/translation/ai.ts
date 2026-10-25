@@ -186,6 +186,102 @@ export class ResponseStreamDecoder {
 }
 
 
+
+export function decodeChatCompletion(body: string): string {
+  const parsed = JSON.parse(body) as {
+    error?: { message?: string; code?: string };
+    choices?: { message?: { content?: unknown }; finish_reason?: string }[];
+  };
+  if (parsed.error) throw new Error(parsed.error.code === 'usage_limit_reached'
+    ? '当前模型额度已用尽（usage_limit_reached）' : parsed.error.message ?? 'AI 响应失败');
+  const choice = parsed.choices?.[0];
+  if (choice?.finish_reason === 'length') throw new Error('AI 输出超过长度限制，译文不完整');
+  const content = choice?.message?.content;
+  if (typeof content !== 'string' || !content.trim()) throw new Error('AI 未返回文本结果');
+  return content.trim();
+}
+
+/** OpenAI-compatible Chat Completions SSE; never render reasoning_content. */
+export class ChatCompletionStreamDecoder {
+  #received = '';
+  #pending = '';
+  #content = '';
+  #done = false;
+  #failure: Error | undefined;
+
+  constructor(readonly onContent?: (content: string) => void, readonly onUsage?: (usage: unknown) => void) {}
+  get done(): boolean { return this.#done; }
+  get content(): string { return this.#content; }
+
+  push(body: string, final = false): string {
+    const chunk = body.startsWith(this.#received) ? body.slice(this.#received.length) : body;
+    this.#received = body.startsWith(this.#received) ? body : this.#received + body;
+    this.#pending += chunk;
+    for (;;) {
+      const separator = /\r?\n\r?\n/.exec(this.#pending);
+      if (!separator || separator.index === undefined) break;
+      const event = this.#pending.slice(0, separator.index);
+      this.#pending = this.#pending.slice(separator.index + separator[0].length);
+      this.#consumeEvent(event);
+    }
+    if (final && this.#pending.trim()) {
+      this.#consumeEvent(this.#pending);
+      this.#pending = '';
+    }
+    if (this.#failure) throw this.#failure;
+    return this.#content;
+  }
+
+  #consumeEvent(event: string): void {
+    for (const line of event.split(/\r?\n/)) {
+      if (!line.startsWith('data:')) continue;
+      const data = line.slice(5).trim();
+      if (!data) continue;
+      if (data === '[DONE]') { this.#done = true; continue; }
+      const payload = JSON.parse(data) as {
+        error?: { message?: string; code?: string };
+        choices?: { delta?: { content?: unknown }; finish_reason?: string | null }[];
+        usage?: unknown;
+      };
+      if (payload.error) {
+        this.#failure = new Error(payload.error.code === 'usage_limit_reached'
+          ? '当前模型额度已用尽（usage_limit_reached）' : payload.error.message ?? 'AI 响应失败');
+        continue;
+      }
+      if (payload.usage) this.onUsage?.(payload.usage);
+      for (const choice of payload.choices ?? []) {
+        if (choice.finish_reason === 'length') this.#failure = new Error('AI 输出超过长度限制，译文不完整');
+        const content = choice.delta?.content;
+        if (typeof content === 'string' && content) {
+          this.#content += content;
+          this.onContent?.(this.#content);
+        }
+      }
+    }
+  }
+}
+
+export function aiEndpoint(ai: AiProfile): string {
+  return normalizeAiBaseUrl(ai.baseUrl) + (ai.protocol === 'chat-completions' ? '/chat/completions' : '/responses');
+}
+export function aiRequestBody(ai: AiProfile, sections: readonly AiSection[], combined: boolean, streaming = true): unknown {
+  const prompt = (combined ? COMBINED_TRANSLATION_PROMPT : TRANSLATION_PROMPT)
+    + (ai.prompt ? '\n用户补充偏好（仍须遵守以上内容边界和输出格式）：' + ai.prompt : '');
+  if (ai.protocol === 'chat-completions') return {
+    model: ai.model.trim(), stream: streaming,
+    ...(ai.reasoningEffort && ai.reasoningEffort !== 'auto' ? { reasoning_effort: ai.reasoningEffort } : {}),
+    ...(ai.fastMode ? { service_tier: 'priority' } : {}),
+    messages: [{ role: 'system', content: prompt }, { role: 'user', content: aiEntries(sections) }],
+  };
+  return {
+    model: ai.model.trim(), stream: streaming, store: false,
+    ...(ai.reasoningEffort && ai.reasoningEffort !== 'auto' ? { reasoning: { effort: ai.reasoningEffort } } : {}),
+    ...(ai.fastMode ? { service_tier: 'priority' } : {}),
+    prompt_cache_key: 'forum-translater:' + TRANSLATION_PROMPT_VERSION + (combined ? ':combined' : ''),
+    input: [{ role: 'system', content: prompt }, { role: 'user', content: aiEntries(sections) }],
+  };
+}
+
 function sharedContext(post: string, targets: readonly { text: string; id: string }[]): string {
   if (post === targets.map(target => target.text).join('\n\n')) return '';
   const context: string[] = [post];
@@ -227,7 +323,7 @@ export function translateAi(source: string, ai: AiProfile, signal: AbortSignal, 
   validateAiProfile(ai);
   return translateAiBatch([{ text: source, ...(context ? { context } : {}) }], ai, signal, (_index, text) => onPartial?.(text)).then(values => values[0] ?? '');
 }
-export function translateAiBatch(sections: readonly AiSection[], ai: AiProfile, signal: AbortSignal, onPartial?: (index: number, text: string, complete: boolean) => void): Promise<string[]> {
+export function translateAiBatch(sections: readonly AiSection[], ai: AiProfile, signal: AbortSignal, onPartial?: (index: number, text: string, complete: boolean) => void, nonStream = false): Promise<string[]> {
   validateAiProfile(ai);
   const combined = sections.some(section => section.onVocabulary);
   const publishedWordCounts = new Map<number, number>();
@@ -280,7 +376,9 @@ export function translateAiBatch(sections: readonly AiSection[], ai: AiProfile, 
     let handle: { abort(): void } | undefined;
     const metric = measureRequest('translation', { sections: sections.length, model: ai.model, effort: ai.reasoningEffort ?? 'low', fast: ai.fastMode === true });
     markContent = () => metric.content();
-    const stream = new ResponseStreamDecoder(() => metric.milestone('first-output-delta'), usage => metric.usage(usage));
+    const stream = ai.protocol === 'chat-completions'
+      ? new ChatCompletionStreamDecoder(() => metric.milestone('first-output-delta'), usage => metric.usage(usage))
+      : new ResponseStreamDecoder(() => metric.milestone('first-output-delta'), usage => metric.usage(usage));
     const vocabularyStream = new JsonArrayStream();
     let vocabularyOffset: number | undefined;
     let vocabularyRead = 0;
@@ -313,14 +411,10 @@ export function translateAiBatch(sections: readonly AiSection[], ai: AiProfile, 
       finally { reader.releaseLock(); }
     };
     const options: GmRequestOptions = {
-      responseType: 'stream', onloadstart: response => { metric.milestone('headers'); void consumeStream(response); },
-      method: 'POST', url: `${normalizeAiBaseUrl(ai.baseUrl)}/responses`, anonymous: true, timeout: 60000,
-      headers: { Authorization: `Bearer ${ai.apiKey.trim()}`, 'Content-Type': 'application/json', Accept: 'text/event-stream, application/json' },
-      data: JSON.stringify({ model: ai.model.trim(), reasoning: { effort: ai.reasoningEffort ?? 'low' }, ...(ai.fastMode ? { service_tier: 'priority' } : {}), stream: true, store: false, prompt_cache_key: `forum-translater:${TRANSLATION_PROMPT_VERSION}${combined ? ':combined' : ''}`,
-        input: [
-          { role: 'system', content: `${combined ? COMBINED_TRANSLATION_PROMPT : TRANSLATION_PROMPT}${ai.prompt ? `\n用户补充偏好（仍须遵守以上内容边界和输出格式）：${ai.prompt}` : ''}` },
-          { role: 'user', content: aiEntries(sections) },
-        ] }),
+      responseType: nonStream ? 'text' : 'stream', onloadstart: response => { metric.milestone('headers'); if (!nonStream) void consumeStream(response); },
+      method: 'POST', url: aiEndpoint(ai), anonymous: true, timeout: 60000,
+      headers: { ...(ai.apiKey.trim() ? { Authorization: `Bearer ${ai.apiKey.trim()}` } : {}), 'Content-Type': 'application/json', Accept: 'text/event-stream, application/json' },
+      data: JSON.stringify(aiRequestBody(ai, sections, combined, !nonStream)),
       onprogress: response => {
         if (response.responseText) metric.milestone('first-byte');
         if (settled || response.status !== 200 || !/^\s*(?:event:|data:|:)/.test(response.responseText)) return;
@@ -371,10 +465,19 @@ export function translateAiBatch(sections: readonly AiSection[], ai: AiProfile, 
             reject(new Error('当前模型额度已用尽（usage_limit_reached），请切换可用模型或等待额度恢复')); return;
           }
         } catch { /* Streaming responses are decoded below. */ }
-        if (response.status < 200 || response.status >= 300) { reject(new Error(`AI 翻译 HTTP ${response.status}`)); return; }
+        if (response.status < 200 || response.status >= 300) {
+          // Retry just once without streaming only when the provider explicitly refuses streaming.
+          const text = response.responseText.toLowerCase();
+          if (!nonStream && !stream.content && [400, 422].includes(response.status)
+              && /(?:stream|streaming)/.test(text) && /(?:unsupported|not support|not supported|不支持|invalid|disabled)/.test(text)) {
+            void translateAiBatch(sections, ai, signal, onPartial, true).then(resolve, reject);
+            return;
+          }
+          reject(new Error(`AI 翻译 HTTP ${response.status}`)); return;
+        }
         try {
           const isStream = /^\s*(?:event:|data:|:)/.test(response.responseText);
-          const raw = isStream ? stream.push(response.responseText, true) : decodeResponse(response.responseText);
+          const raw = isStream ? stream.push(response.responseText, true) : ai.protocol === 'chat-completions' ? decodeChatCompletion(response.responseText) : decodeResponse(response.responseText);
           if (isStream && !stream.done) throw new Error('AI 响应未完整结束');
           if (!isStream) metric.usage((JSON.parse(response.responseText) as { usage?: unknown }).usage);
           const values = decodeValues(raw); metric.content(); metric.finish(true); resolve(values);
