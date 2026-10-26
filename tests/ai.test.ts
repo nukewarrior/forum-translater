@@ -28,6 +28,52 @@ it('decodes cumulative fragmented SSE without duplicating deltas and rejects fai
   expect(decoder.done).toBe(true);
   expect(() => new ResponseStreamDecoder().push(event({ type: 'response.failed', response: { error: { message: 'private body' } } }), true)).toThrow('AI 响应失败');
 });
+it('recognizes Responses events by SSE event: names when the proxy omits JSON type', async () => {
+  const abort = vi.fn();
+  const sse = (type: string, payload: object) => 'event: ' + type + '\ndata: ' + JSON.stringify(payload) + '\n\n';
+  const body = sse('response.output_text.delta', { delta: '{"section_0":"你好"}' })
+    + sse('response.completed', { response: { status: 'completed', usage: { input_tokens: 8, output_tokens: 3 } } });
+  vi.stubGlobal('GM_xmlhttpRequest', (options: GmRequestOptions) => {
+    queueMicrotask(() => {
+      options.onprogress?.({ status: 200, responseText: body });
+      options.onload?.({ status: 200, responseText: body });
+    });
+    return { abort };
+  });
+  await expect(translateAi('Hello', ai, new AbortController().signal)).resolves.toBe('你好');
+  expect(abort).not.toHaveBeenCalled();
+});
+
+it('accepts HTTP completion on stream transport even if reader has not yet signaled EOF', async () => {
+  let options: GmRequestOptions | undefined;
+  const abort = vi.fn();
+  let streamController!: ReadableStreamDefaultController<Uint8Array>;
+  const cancel = vi.fn();
+  const transport = new ReadableStream<Uint8Array>({
+    start(controller) { streamController = controller; },
+    cancel,
+  });
+  vi.stubGlobal('GM_xmlhttpRequest', (value: GmRequestOptions) => {
+    options = value; return { abort };
+  });
+  const pending = translateAi('Hello', ai, new AbortController().signal);
+  options?.onloadstart?.({ status: 200, responseText: '', response: transport });
+  streamController.enqueue(new TextEncoder().encode(
+    event({ type: 'response.output_text.delta', delta: '{"section_0":"你好"}' })
+    + event({ type: 'response.completed' }),
+  ));
+  await vi.waitFor(() => expect(options).toBeDefined());
+  await Promise.resolve(); await Promise.resolve();
+  // Tampermonkey indicates HTTP completion, but its stream reader still waits
+  // for one more read() result. Neither abort() nor reader.cancel() is allowed.
+  options?.onload?.({ status: 200, responseText: '', response: transport });
+  await expect(pending).resolves.toBe('你好');
+  expect(abort).not.toHaveBeenCalled();
+  streamController.close();
+  await Promise.resolve();
+  expect(cancel).not.toHaveBeenCalled();
+});
+
 it.each(['response.failed', 'response.incomplete', 'error'])('rejects %s immediately even if the server leaves the stream open', async type => {
   const abort = vi.fn();
   vi.stubGlobal('GM_xmlhttpRequest', (options: GmRequestOptions) => {
