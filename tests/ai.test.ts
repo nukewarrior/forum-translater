@@ -10,7 +10,7 @@ import { translate } from '../src/translation/provider';
 import { retryableTranslationError } from '../src/translation/retry';
 import { TranslationCache, TranslationService } from '../src/translation/service';
 const ai = { ...DEFAULTS.ai, baseUrl: 'https://example.com/v1', apiKey: 'test-only-key', model: 'test-model' };
-const settings: Settings = { ...DEFAULTS, provider: 'ai', vocabulary: false, ai };
+const settings: Settings = { ...DEFAULTS, provider: 'ai', ai };
 const event = (payload: unknown): string => `data: ${JSON.stringify(payload)}\r\n\r\n`;
 const body = event({ type: 'response.output_text.delta', delta: '{"section_0":"你好 ⟦0⟧"}' }) + event({ type: 'response.completed' });
 let store: Map<string, unknown>;
@@ -28,6 +28,98 @@ it('decodes cumulative fragmented SSE without duplicating deltas and rejects fai
   expect(decoder.done).toBe(true);
   expect(() => new ResponseStreamDecoder().push(event({ type: 'response.failed', response: { error: { message: 'private body' } } }), true)).toThrow('AI 响应失败');
 });
+it('recognizes Responses events by SSE event: names when the proxy omits JSON type', async () => {
+  const abort = vi.fn();
+  const sse = (type: string, payload: object) => 'event: ' + type + '\ndata: ' + JSON.stringify(payload) + '\n\n';
+  const body = sse('response.output_text.delta', { delta: '{"section_0":"你好"}' })
+    + sse('response.completed', { response: { status: 'completed', usage: { input_tokens: 8, output_tokens: 3 } } });
+  vi.stubGlobal('GM_xmlhttpRequest', (options: GmRequestOptions) => {
+    queueMicrotask(() => {
+      options.onprogress?.({ status: 200, responseText: body });
+      options.onload?.({ status: 200, responseText: body });
+    });
+    return { abort };
+  });
+  await expect(translateAi('Hello', ai, new AbortController().signal)).resolves.toBe('你好');
+  expect(abort).not.toHaveBeenCalled();
+});
+
+it('accepts HTTP completion on stream transport even if reader has not yet signaled EOF', async () => {
+  let options: GmRequestOptions | undefined;
+  const abort = vi.fn();
+  let streamController!: ReadableStreamDefaultController<Uint8Array>;
+  const cancel = vi.fn();
+  const transport = new ReadableStream<Uint8Array>({
+    start(controller) { streamController = controller; },
+    cancel,
+  });
+  vi.stubGlobal('GM_xmlhttpRequest', (value: GmRequestOptions) => {
+    options = value; return { abort };
+  });
+  const pending = translateAi('Hello', ai, new AbortController().signal);
+  options?.onloadstart?.({ status: 200, responseText: '', response: transport });
+  streamController.enqueue(new TextEncoder().encode(
+    event({ type: 'response.output_text.delta', delta: '{"section_0":"你好"}' })
+    + event({ type: 'response.completed' }),
+  ));
+  await vi.waitFor(() => expect(options).toBeDefined());
+  await Promise.resolve(); await Promise.resolve();
+  // Tampermonkey indicates HTTP completion, but its stream reader still waits
+  // for one more read() result. Neither abort() nor reader.cancel() is allowed.
+  options?.onload?.({ status: 200, responseText: '', response: transport });
+  await expect(pending).resolves.toBe('你好');
+  expect(abort).not.toHaveBeenCalled();
+  streamController.close();
+  await Promise.resolve();
+  expect(cancel).not.toHaveBeenCalled();
+});
+
+it('finishes a valid Responses terminal event without abort when stream onload and EOF never arrive', async () => {
+  vi.useFakeTimers();
+  let options: GmRequestOptions | undefined;
+  const abort = vi.fn();
+  vi.stubGlobal('GM_xmlhttpRequest', (request: GmRequestOptions) => {
+    options = request; return { abort };
+  });
+  const result = translateAi('Hello', ai, new AbortController().signal);
+  const resolved = vi.fn(); void result.then(resolved);
+  const body = event({ type: 'response.output_text.delta', delta: '{"section_0":"你好"}' })
+    + event({ type: 'response.completed' });
+  options?.onprogress?.({ status: 200, responseText: body });
+  await vi.advanceTimersByTimeAsync(1499);
+  expect(resolved).not.toHaveBeenCalled();
+  expect(abort).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  await expect(result).resolves.toBe('你好');
+  expect(abort).not.toHaveBeenCalled();
+  // A hanging ReadableStream or missing onload must not be treated as a
+  // client-side cancellation. The network is allowed to finish on its own.
+  await vi.advanceTimersByTimeAsync(60000);
+  expect(abort).not.toHaveBeenCalled();
+});
+
+it('refreshes the 60-second idle guard while streamed translation keeps growing', async () => {
+  vi.useFakeTimers();
+  let options: GmRequestOptions | undefined;
+  const abort = vi.fn();
+  vi.stubGlobal('GM_xmlhttpRequest', (value: GmRequestOptions) => { options = value; return { abort }; });
+  const result = translateAi('Hello', ai, new AbortController().signal);
+  let responseText = '';
+  await vi.advanceTimersByTimeAsync(59000);
+  responseText += event({ type: 'response.output_text.delta', delta: '{"section_0":"你' });
+  options?.onprogress?.({ status: 200, responseText });
+  await vi.advanceTimersByTimeAsync(59000);
+  responseText += event({ type: 'response.output_text.delta', delta: '好"}' });
+  options?.onprogress?.({ status: 200, responseText });
+  await vi.advanceTimersByTimeAsync(59000);
+  expect(abort).not.toHaveBeenCalled();
+  responseText += event({ type: 'response.completed' });
+  options?.onprogress?.({ status: 200, responseText });
+  await vi.advanceTimersByTimeAsync(1500);
+  await expect(result).resolves.toBe('你好');
+  expect(abort).not.toHaveBeenCalled();
+});
+
 it.each(['response.failed', 'response.incomplete', 'error'])('rejects %s immediately even if the server leaves the stream open', async type => {
   const abort = vi.fn();
   vi.stubGlobal('GM_xmlhttpRequest', (options: GmRequestOptions) => {
@@ -66,16 +158,16 @@ it.each([
 });
 
 it.each([
-  { section_0: '已完成正文', section_1: '缺少保护标记', vocabulary: [] },
+  { section_0: '已完成正文', section_1: '缺少保护标记', extra_field: [] },
   { section_0: '已完成正文' },
-  { section_0: '已完成正文', section_1: '有效 ⟦0⟧', vocabulary: 'invalid' },
+  { section_0: '已完成正文', section_1: '有效 ⟦0⟧', extra_field: 'invalid' },
 ])('retains valid sections from a non-streaming response before rejecting its invalid remainder: %j', async output => {
   vi.stubGlobal('GM_xmlhttpRequest', (options: GmRequestOptions) => {
     queueMicrotask(() => options.onload?.({ status: 200, responseText: JSON.stringify({ output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(output) }] }] }) }));
     return { abort: vi.fn() };
   });
   const partial = vi.fn();
-  await expect(translateAiBatch([{ text: 'First', onVocabulary: vi.fn() }, { text: 'Second ⟦0⟧' }], ai, new AbortController().signal, partial)).rejects.toThrow('不匹配');
+  await expect(translateAiBatch([{ text: 'First' }, { text: 'Second ⟦0⟧' }], ai, new AbortController().signal, partial)).rejects.toThrow('不匹配');
   expect(partial).toHaveBeenCalledWith(0, '已完成正文', true);
   expect(partial.mock.calls.filter(call => call[0] === 0)).toHaveLength(1);
   if (output.section_1 !== '有效 ⟦0⟧') expect(partial.mock.calls.filter(call => call[0] === 1)).toHaveLength(0);
@@ -84,7 +176,7 @@ it.each([
 it.each([
   ['onprogress', '"尚未完成'], ['onload', '"尚未完成'],
   ['onprogress', '"缺少保护标记"'], ['onload', '"缺少保护标记"'],
-] as const)('preserves only valid completed text before a same-block failure through %s (%s)', async (callback, unfinished) => {
+] as const)('rejects partial stream failures without automatic retry through %s (%s)', async (callback, unfinished) => {
   vi.useFakeTimers();
   const tasks = new TranslationTaskManager({ maxConcurrent: 4 });
   const batcher = new AiBatcher(ai, tasks);
@@ -94,25 +186,27 @@ it.each([
     const payload = JSON.parse(options.data) as { input: { content: string }[] };
     const sections = JSON.parse(payload.input[1]?.content ?? '[]') as { text: string }[];
     sent.push(sections.map(section => section.text));
-    const responseText = sent.length === 1
+    const firstAttempt = sent.length === 1;
+    const responseText = firstAttempt
       ? event({ type: 'response.output_text.delta', delta: `{"section_0":"第一段 ⟦0⟧","section_1":${unfinished}` }) + event({ type: 'response.failed' })
-      : event({ type: 'response.output_text.delta', delta: '{"section_0":"第二段 ⟦1⟧","vocabulary":[]}' }) + event({ type: 'response.completed' });
-    queueMicrotask(() => options[callback]?.({ status: 200, responseText }));
+      : event({ type: 'response.output_text.delta', delta: '{"section_0":"第一段 ⟦0⟧","section_1":"第二段 ⟦1⟧"}' }) + event({ type: 'response.completed' });
+    queueMicrotask(() => firstAttempt
+      ? options[callback]?.({ status: 200, responseText })
+      : options.onload?.({ status: 200, responseText }));
     return { abort: vi.fn() };
   });
   vi.stubGlobal('GM_xmlhttpRequest', request);
   const signal = new AbortController().signal;
-  const first = batcher.request('first', { text: 'First ⟦0⟧', onVocabulary: vi.fn() }, 'visible', signal, vi.fn());
-  const second = batcher.request('second', { text: 'Second ⟦1⟧', onVocabulary: vi.fn() }, 'visible', signal, vi.fn());
-  const secondResolved = vi.fn(); void second.then(secondResolved);
+  const first = batcher.request('first', { text: 'First ⟦0⟧' }, 'visible', signal, vi.fn());
+  const second = batcher.request('second', { text: 'Second ⟦1⟧' }, 'visible', signal, vi.fn());
+  const results = Promise.allSettled([first, second]);
   await vi.advanceTimersByTimeAsync(25);
-  expect(await first).toBe('第一段 ⟦0⟧');
-  expect(secondResolved).not.toHaveBeenCalled();
-  expect(request).toHaveBeenCalledOnce();
-  await vi.advanceTimersByTimeAsync(1000);
-  expect(await second).toBe('第二段 ⟦1⟧');
-  expect(request).toHaveBeenCalledTimes(2);
-  expect(sent).toEqual([['First ⟦0⟧', 'Second ⟦1⟧'], ['Second ⟦1⟧']]);
+  for (const result of await results) {
+    expect(result).toMatchObject({ status: 'rejected', reason: { name: 'PartialTranslationError' } });
+  }
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(sent).toEqual([['First ⟦0⟧', 'Second ⟦1⟧']]);
   batcher.destroy(); tasks.destroy();
 });
 it('passes selected effort and fast tier to the transport', async () => {
@@ -163,21 +257,33 @@ it('isolates models and prompts in cache without persisting credentials in cache
     try { expect(await service.section('Hello world', 'owner', 'visible', new AbortController().signal)).toBe('你好'); } finally { service.destroy(); }
   }
   expect(request).toHaveBeenCalledTimes(3);
-  saveSettings(settings); expect(loadSettings()).toEqual(settings);
+  saveSettings(settings); expect(loadSettings()).toMatchObject({ provider: 'google', enabled: settings.enabled, translationTheme: settings.translationTheme });
   expect(JSON.stringify(store.get('ft:settings:v1'))).not.toContain(ai.apiKey);
   expect(JSON.stringify(store.get('ft:translations:v1'))).not.toContain(ai.apiKey);
   expect(normalizeAiBaseUrl('http://localhost:8080/v1/')).toBe('http://localhost:8080/v1');
   expect(() => normalizeAiBaseUrl('http://example.com/v1')).toThrow();
   expect(() => normalizeAiBaseUrl('https://key@example.com/v1')).toThrow();
-  expect(() => translateAi('Hello', { ...ai, apiKey: '' }, new AbortController().signal)).toThrow('API Key');
+  await expect(translateAi('Hello', { ...ai, apiKey: '' }, new AbortController().signal)).resolves.toBe('你好');
 });
 
-it('returns a validated streamed translation before connection close and frees transport', async () => {
+it('previews complete JSON but waits for SSE success and HTTP EOF without aborting', async () => {
   let options: GmRequestOptions | undefined; const abort = vi.fn();
   vi.stubGlobal('GM_xmlhttpRequest', (value: GmRequestOptions) => { options = value; return { abort }; });
-  const promise = translateAi('Hello ⟦0⟧', ai, new AbortController().signal);
-  options?.onprogress?.({ status: 200, responseText: event({ type: 'response.output_text.delta', delta: '{"section_0":"你好 ⟦0⟧"}' }) });
-  expect(await promise).toBe('你好 ⟦0⟧'); expect(abort).toHaveBeenCalledOnce();
+  const partial = vi.fn();
+  const promise = translateAi('Hello ⟦0⟧', ai, new AbortController().signal, partial);
+  const resolved = vi.fn(); void promise.then(resolved);
+  let responseText = event({ type: 'response.output_text.delta', delta: '{"section_0":"你好 ⟦0⟧"}' });
+  options?.onprogress?.({ status: 200, responseText });
+  expect(partial).toHaveBeenCalledWith('你好 ⟦0⟧');
+  await Promise.resolve(); expect(resolved).not.toHaveBeenCalled();
+  expect(abort).not.toHaveBeenCalled();
+  responseText += event({ type: 'response.completed' });
+  options?.onprogress?.({ status: 200, responseText });
+  await Promise.resolve(); expect(resolved).not.toHaveBeenCalled();
+  expect(abort).not.toHaveBeenCalled();
+  options?.onload?.({ status: 200, responseText });
+  expect(await promise).toBe('你好 ⟦0⟧');
+  expect(abort).not.toHaveBeenCalled();
 });
 it('does not accept early JSON with missing protected markers', async () => {
   let options: GmRequestOptions | undefined; const abort = vi.fn();
@@ -226,30 +332,13 @@ it('measures the first visible translation instead of JSON syntax or an incomple
   await vi.advanceTimersByTimeAsync(300); push('0⟧你');
   expect(partial).toHaveBeenCalledExactlyOnceWith('   ⟦0⟧你');
   await vi.advanceTimersByTimeAsync(300); push('"}');
+  responseText += event({ type: 'response.completed' });
+  options?.onload?.({ status: 200, responseText });
   await expect(promise).resolves.toBe('   ⟦0⟧你');
   expect(readTranslationMetrics().samples.at(-1)).toMatchObject({ kind: 'translation', firstContentMs: 600, durationMs: 900, success: true });
 });
 
-it('publishes each section state once while later sections and 100 vocabulary deltas arrive', async () => {
-  let options: GmRequestOptions | undefined;
-  vi.stubGlobal('GM_xmlhttpRequest', (value: GmRequestOptions) => { options = value; return { abort: vi.fn() }; });
-  const partial = vi.fn(); const vocabulary = vi.fn();
-  const promise = translateAiBatch([{ text: 'One', onVocabulary: vocabulary }, { text: 'Two' }], ai, new AbortController().signal, partial);
-  let responseText = '';
-  const push = (delta: string): void => {
-    responseText += event({ type: 'response.output_text.delta', delta });
-    options?.onprogress?.({ status: 200, responseText });
-  };
-  push('{"section_0":"一');
-  push('","section_1":"二","vocabulary":[{"section":"section_0","word":"');
-  expect(partial.mock.calls).toEqual([[0, '一', false], [0, '一', true], [1, '二', true]]);
-  for (let index = 0; index < 100; index++) push('a');
-  expect(partial).toHaveBeenCalledTimes(3);
-  push('"}]}');
-  await expect(promise).resolves.toEqual(['一', '二']);
-  expect(partial).toHaveBeenCalledTimes(3);
-  expect(vocabulary).toHaveBeenLastCalledWith([{ section: 'section_0', word: 'a'.repeat(100) }], true);
-});
+
 
 it('records first content for a validated non-streaming response', async () => {
   vi.useFakeTimers();
@@ -262,14 +351,24 @@ it('records first content for a validated non-streaming response', async () => {
   expect(readTranslationMetrics().samples.at(-1)).toMatchObject({ kind: 'translation', firstContentMs: 400, durationMs: 400, success: true });
 });
 
-it('reads GM response streams at loadstart before the transport load event', async () => {
+it('reads GM response streams through natural EOF without cancelling the reader', async () => {
   let options: GmRequestOptions | undefined; const abort = vi.fn();
   vi.stubGlobal('GM_xmlhttpRequest', (value: GmRequestOptions) => { options = value; return { abort }; });
   const promise = translateAi('Hello ⟦0⟧', ai, new AbortController().signal);
+  const resolved = vi.fn(); void promise.then(resolved);
   expect(options?.responseType).toBe('stream');
-  const stream = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode(body)); } });
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const cancel = vi.fn();
+  const stream = new ReadableStream<Uint8Array>({ start(value) { controller = value; }, cancel });
   options?.onloadstart?.({ status: 200, responseText: '', response: stream });
-  expect(await promise).toBe('你好 ⟦0⟧'); expect(abort).toHaveBeenCalledOnce();
+  controller.enqueue(new TextEncoder().encode(body));
+  await Promise.resolve(); await Promise.resolve();
+  expect(resolved).not.toHaveBeenCalled();
+  expect(abort).not.toHaveBeenCalled();
+  controller.close();
+  expect(await promise).toBe('你好 ⟦0⟧');
+  expect(abort).not.toHaveBeenCalled();
+  expect(cancel).not.toHaveBeenCalled();
 });
 
 

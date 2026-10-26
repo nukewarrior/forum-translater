@@ -1,5 +1,4 @@
 import { redditContext } from './reddit-context';
-import { mountVocabulary } from './vocabulary-ui';
 import { xParagraphs } from './x-paragraphs';
 import { XLongPosts } from './x-long-posts';
 import { isXPostBackground, isXPostBackgroundRoute, isXPostPath } from './x-post-modal';
@@ -15,7 +14,7 @@ import { isOwnedMutation } from './dom-mutations';
 interface Entry {
   element: HTMLElement; kind: Kind; box: HTMLDivElement | null; controller: AbortController | null;
   near: boolean; visible: boolean; state: 'idle' | 'loading' | 'done' | 'error';
-  signature: string; sourceSignature: string | null; identity: string; owner: string; completed: Map<number, string>; inlineBoxes: HTMLDivElement[]; originals: OriginalVisibility; learning: (() => void) | null;
+  signature: string; sourceSignature: string | null; identity: string; owner: string; completed: Map<number, string>; inlineBoxes: HTMLDivElement[]; originals: OriginalVisibility;
 }
 function matchTextStyle(target: HTMLElement, source: Element): void {
   const style = getComputedStyle(source);
@@ -35,6 +34,7 @@ export class RedditRuntime {
   private roots = new Set<ParentNode>();
   private sequence = 0;
   private destroyed = false;
+  private reconcileTimer: ReturnType<typeof setTimeout> | undefined;
   private route = location.href;
   private translationOnly: boolean;
   private tabTitle = new TabTitle();
@@ -43,7 +43,7 @@ export class RedditRuntime {
     this.settings.translationTheme = theme;
     for (const entry of this.entries.values()) for (const box of [entry.box, ...entry.inlineBoxes]) if (box) box.dataset.translationTheme = theme;
   }
-  constructor(readonly settings: Settings, readonly service: TranslationService) {
+  constructor(readonly settings: Settings, readonly service: TranslationService, readonly onProfileNavigation?: () => boolean) {
     this.translationOnly = settings.translationOnly;
     this.nearObserver = new IntersectionObserver(changes => {
       for (const change of changes) {
@@ -115,7 +115,15 @@ export class RedditRuntime {
       if (!document.hidden) this.start(entry);
     }
   };
-  private schedule(): void { this.service.worker.render('reconcile', () => this.reconcile(), 16); }
+  private schedule(): void {
+    // Content discovery must not wait for scrolling to stop: Reddit virtualizes
+    // long comment threads and often mounts the next comments mid-scroll.
+    // One reconcile per frame coalesces bursts of DOM mutations.
+    this.reconcileTimer ??= setTimeout(() => {
+      this.reconcileTimer = undefined;
+      this.reconcile();
+    }, 16);
+  }
   private updateForeground(): void {
     // IntersectionObserver already supplies visibility. Reading rects while sorting
     // every visible post can force layout during a swipe, especially inside dialogs.
@@ -129,7 +137,6 @@ export class RedditRuntime {
   }
   private remove(entry: Entry): void {
     this.detached.delete(entry);
-    entry.learning?.(); entry.learning = null;
     this.cancel(entry); entry.originals.restore(); for (const item of entry.inlineBoxes) item.remove(); entry.box?.remove(); this.nearObserver.unobserve(entry.element);
     this.visibleObserver.unobserve(entry.element); this.service.release(entry.owner); this.entries.delete(entry.element);
   }
@@ -138,12 +145,13 @@ export class RedditRuntime {
     this.longPosts.reconcile();
     this.feed.reconcile();
     if (this.route !== location.href) {
+      if (this.onProfileNavigation?.()) return;
       const nativePostNavigation = isXSite() && document.documentElement.hasAttribute('data-ft-x-post-layout')
         && (isXPostPath(new URL(this.route, location.href).pathname) || isXPostPath(location.pathname ?? ''));
       this.tabTitle.reset();
       this.route = location.href; this.translationOnly = loadTranslationOnly();
       // X may keep the feed tree while showing a Post. Do not tear down its
-      // translations, vocabulary listeners, or task manager just because the URL changed.
+      // translations or task manager just because the URL changed.
       if (!isXSite()) {
         for (const entry of this.entries.values()) this.remove(entry);
         this.service.resetPending();
@@ -202,7 +210,7 @@ export class RedditRuntime {
         const visibleNow = !document.hidden && rect.width > 0 && rect.height > 0
           && rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth;
         const entry: Entry = { element, kind, box: null, controller: null, near: sameContent ? existing.near : false, visible: sameContent ? existing.visible : false,
-          state: 'idle', completed: new Map(), inlineBoxes: [], originals: new OriginalVisibility(), learning: null, signature, sourceSignature: signature, identity, owner: sameContent ? existing.owner : String(++this.sequence) };
+          state: 'idle', completed: new Map(), inlineBoxes: [], originals: new OriginalVisibility(), signature, sourceSignature: signature, identity, owner: sameContent ? existing.owner : String(++this.sequence) };
         if (visibleNow) { entry.visible = true; entry.near = true; }
         this.entries.set(element, entry); this.nearObserver.observe(element); this.visibleObserver.observe(element);
         if (entry.near || entry.visible) this.start(entry);
@@ -224,6 +232,14 @@ export class RedditRuntime {
   }
   private start(entry: Entry, manual = false): void {
     if (this.destroyed || entry.state !== 'idle' && !(manual && entry.state === 'error')) return;
+    if (entry.visible || manual) {
+      // Visible work is a network launch, not a DOM paint. Bypassing the
+      // scroll-idle paint queue removes the long delay during active scrolling.
+      this.service.worker.release(`start:${entry.owner}`);
+      queueMicrotask(() => this.begin(entry, manual));
+      return;
+    }
+    // Prefetch remains deferred during momentum scrolling to avoid extra work.
     this.service.worker.render(`start:${entry.owner}`, () => this.begin(entry, manual), 0);
   }
   private begin(entry: Entry, manual = false): void {
@@ -242,20 +258,20 @@ export class RedditRuntime {
       let node: Node | undefined = snapshot;
       for (const index of plan.path) node = node?.childNodes[index];
       const protectedNodes = node instanceof Element ? translationTextPlan(node).protectedNodes.map(item => item instanceof Element ? item.outerHTML : item.textContent) : [];
-      return `paragraph:v1:${JSON.stringify([this.settings.provider, ai ? [ai.baseUrl.replace(/\/+$/, ''), ai.model, ai.prompt, TRANSLATION_PROMPT_VERSION, this.settings.vocabulary] : null, entry.identity || `node:${entry.owner}`, entry.kind, plan.text, protectedNodes])}`;
+      return `paragraph:v2:${JSON.stringify([this.settings.provider, ai ? [ai.baseUrl.replace(/\/+$/, ''), ai.model, ai.prompt, TRANSLATION_PROMPT_VERSION, ai.protocol] : null, entry.identity || `node:${entry.owner}`, entry.kind, plan.text, protectedNodes, this.settings.profileId, this.settings.profileRevision])}`;
     });
     const postContext = plans.map(item => item.text).join('\n\n').slice(0, 24000);
     const previews = new Map<number, string>();
-    const previous = entry.identity ? new Map([...this.service.cache.matching('paragraph:v1:'), ...this.completedParagraphs]) : new Map<string, string>();
+    const previous = entry.identity ? new Map([...this.service.cache.matching('paragraph:v2:'), ...this.completedParagraphs]) : new Map<string, string>();
     plans.forEach(plan => {
       const key = paragraphKeys[plan.index] ?? '';
       const cached = this.completedParagraphs.get(key) ?? (entry.identity ? this.service.cache.get(key) : undefined);
       if (cached !== undefined) { entry.completed.set(plan.index, cached); return; }
       let longest = 0;
       for (const [oldKey, value] of previous) {
-        if (!oldKey.startsWith('paragraph:v1:')) continue;
+        if (!oldKey.startsWith('paragraph:v2:')) continue;
         try {
-          const parsed: unknown = JSON.parse(oldKey.slice('paragraph:v1:'.length));
+          const parsed: unknown = JSON.parse(oldKey.slice('paragraph:v2:'.length));
           if (!Array.isArray(parsed)) continue;
           const parts: unknown[] = parsed;
           const source = parts[4];
@@ -263,7 +279,7 @@ export class RedditRuntime {
           const prefix = source.replace(/(?:\.{3}|…)\s*$/, '').trimEnd();
           if (!prefix || prefix.length <= longest || plan.text.length <= prefix.length || !plan.text.startsWith(prefix)) continue;
           parts[4] = plan.text;
-          if (`paragraph:v1:${JSON.stringify(parts)}` !== key) continue;
+          if (`paragraph:v2:${JSON.stringify(parts)}` !== key) continue;
           longest = prefix.length; previews.set(plan.index, value);
         } catch { /* Ignore malformed optional cache entries. */ }
       }
@@ -332,12 +348,6 @@ export class RedditRuntime {
     const running = new Set<number>();
     const render = (): void => {
       if (!current()) return;
-      if (entry.kind !== 'title' && this.settings.vocabulary && !entry.learning) {
-        const owner = entry.element.closest('article[data-testid="tweet"],shreddit-post,.thing.link,[data-testid="post-container"],[data-testid="search-post-with-content-preview"]');
-        const permalink = owner?.querySelector('time')?.closest('a')?.getAttribute('href') ?? owner?.getAttribute('permalink') ?? owner?.querySelector('a[href*="/comments/"]')?.getAttribute('href') ?? location.href;
-        const learningAnchor = entry.element.closest('[data-ft-long-post]')?.querySelector<HTMLElement>(':scope > [data-ft-owned="long-post-toggle"]') ?? box;
-        entry.learning = mountVocabulary(learningAnchor, postContext, new URL(permalink, location.href).href, this.service, { original: entry.element, translations: entry.inlineBoxes.length ? entry.inlineBoxes : [box] });
-      }
       if (inline) {
         for (const plan of plans) {
           const target = entry.inlineBoxes[plan.index]; const source = placements[plan.index]?.node;
@@ -400,7 +410,9 @@ export class RedditRuntime {
         this.service.worker.render(entry.owner, render);
       } catch (error) {
         if (!current()) return;
-        let message = error instanceof Error ? `${error.name}: ${error.message}` : '未知错误';
+        let message = error instanceof Error
+          ? error.name === 'PartialTranslationError' ? error.message : `${error.name}: ${error.message}`
+          : '未知错误';
         if (this.settings.ai.apiKey) message = message.replaceAll(this.settings.ai.apiKey, '[已隐藏]');
         failureReasons.set(index, message.replace(/https?:\/\/\S+/g, '[服务地址]').slice(0, 180));
         streaming.delete(index); if (!previews.has(index)) translations.delete(index); failed.add(index); this.service.worker.render(entry.owner, render);
@@ -423,11 +435,11 @@ export class RedditRuntime {
   }
 
   destroy(): void {
-    this.destroyed = true; this.tabTitle.destroy(); this.feed.reset(); this.mutations.disconnect(); this.nearObserver.disconnect(); this.visibleObserver.disconnect();
+    this.destroyed = true; clearTimeout(this.reconcileTimer); this.reconcileTimer = undefined; this.tabTitle.destroy(); this.feed.reset(); this.mutations.disconnect(); this.nearObserver.disconnect(); this.visibleObserver.disconnect();
     document.removeEventListener('click', this.onCommentExpansion, true);
     document.removeEventListener('toggle', this.onCommentExpansion, true);
     document.removeEventListener('visibilitychange', this.onVisibility); window.removeEventListener('popstate', this.onRoute);
-    for (const entry of this.entries.values()) { this.cancel(entry); entry.learning?.(); entry.originals.restore(); for (const item of entry.inlineBoxes) item.remove(); entry.box?.remove(); }
+    for (const entry of this.entries.values()) { this.cancel(entry); entry.originals.restore(); for (const item of entry.inlineBoxes) item.remove(); entry.box?.remove(); }
     this.entries.clear(); this.detached.clear(); this.longPosts.destroy(); this.completedParagraphs.clear(); this.roots.clear(); this.service.destroy();
   }
 }

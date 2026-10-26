@@ -1,127 +1,149 @@
 // @vitest-environment jsdom
+import { webcrypto } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mountControls } from '../src/ui';
 import { DEFAULTS } from '../src/settings';
+import { activeProfile, listProfiles } from '../src/profile-store';
+
 let destroy: (() => void) | undefined;
+let storage: Map<string, unknown>;
+let nextMenu: number;
 beforeEach(() => {
-  vi.stubGlobal('GM_getValue', (_key: string, fallback: unknown) => fallback);
-  Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value: function (this: HTMLDialogElement) { this.open = true; } });
-  Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value: function (this: HTMLDialogElement) { this.open = false; } }); vi.stubGlobal('GM_registerMenuCommand', vi.fn(() => 1)); vi.stubGlobal('GM_unregisterMenuCommand', vi.fn()); });
-afterEach(() => { destroy?.(); destroy = undefined; vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); document.body.replaceChildren(); });
-describe('standalone translation controls', () => {
-  it('saves independent categories, preload and provider without an image API configuration', () => {
-    const save = vi.fn(); destroy = mountControls(() => ({ ...DEFAULTS }), save, vi.fn());
-    const shadow = document.querySelector('[data-ft-owned="controls"]')?.shadowRoot;
-    expect(document.querySelector<HTMLElement>('[data-ft-owned="controls"]')?.hidden).toBe(true);
-    expect(shadow?.querySelector('button')).toBeNull();
-    vi.mocked(GM_registerMenuCommand).mock.calls[0]?.[1]();
-    const enabled = shadow?.querySelector<HTMLInputElement>('[name="enabled"]');
-    const after = shadow?.querySelector<HTMLInputElement>('[name="after"]');
-    const provider = shadow?.querySelector<HTMLSelectElement>('[name="provider"]');
-    if (!enabled || !after || !provider) throw new Error('Missing standalone controls');
-    enabled.checked = false; after.value = '800'; provider.value = 'microsoft';
-    shadow?.querySelector('form')?.dispatchEvent(new Event('submit', { cancelable: true }));
-    expect(save).toHaveBeenCalledWith({ ...DEFAULTS, enabled: false, after: 800, provider: 'microsoft' });
-    expect(shadow?.querySelector('[name="key"],[name="endpoint"]')).toBeNull();
-    expect(document.querySelector<HTMLElement>('[data-ft-owned="controls"]')?.hidden).toBe(true);
+  storage = new Map(); nextMenu = 0;
+  vi.stubGlobal('crypto', webcrypto);
+  vi.stubGlobal('GM_getValue', (key: string, fallback: unknown) => storage.get(key) ?? fallback);
+  vi.stubGlobal('GM_setValue', (key: string, value: unknown) => { storage.set(key, value); });
+  vi.stubGlobal('GM_deleteValue', (key: string) => { storage.delete(key); });
+  vi.stubGlobal('GM_listValues', () => [...storage.keys()]);
+  vi.stubGlobal('GM_registerMenuCommand', vi.fn(() => ++nextMenu));
+  vi.stubGlobal('GM_unregisterMenuCommand', vi.fn());
+  vi.stubGlobal('confirm', vi.fn(() => true));
+  Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true,
+    value: function (this: HTMLDialogElement) { this.open = true; } });
+  Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true,
+    value: function (this: HTMLDialogElement) { this.open = false; } });
+});
+afterEach(() => {
+  destroy?.(); destroy = undefined;
+  vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks();
+  document.body.replaceChildren();
+});
+function open(): ShadowRoot {
+  const menu = vi.mocked(GM_registerMenuCommand).mock.calls.find(([title]) => title.includes('翻译设置'));
+  if (!menu) throw new Error('Missing settings menu');
+  menu[1]();
+  const shadow = document.querySelector('[data-ft-owned="controls"]')?.shadowRoot;
+  if (!shadow) throw new Error('Missing controls shadow');
+  return shadow;
+}
+function setField(shadow: ShadowRoot, name: string, value: string): void {
+  const field = shadow.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-field="${name}"]`);
+  if (!field) throw new Error('Missing field ' + name);
+  field.value = value;
+  field.dispatchEvent(new Event('input', { bubbles: true }));
+  field.dispatchEvent(new Event('change', { bubbles: true }));
+}
+describe('translation profile settings', () => {
+  it('opens the new profile editor and retains the independent global display controls', () => {
+    const save = vi.fn();
+    destroy = mountControls(() => ({ ...DEFAULTS }), save, vi.fn());
+    const shadow = open();
+    expect(shadow.textContent).toContain('我的 Profile');
+    expect(shadow.textContent).toContain('Google 翻译');
+    expect(shadow.textContent).not.toContain('单词本');
+    expect(shadow.textContent).not.toContain('词汇学习');
+    const enabled = shadow.querySelector<HTMLInputElement>('[name="enabled"]');
+    const after = shadow.querySelector<HTMLInputElement>('[name="after"]');
+    expect(enabled).toBeTruthy(); expect(after).toBeTruthy();
+    if (!enabled || !after) return;
+    enabled.checked = false; after.value = '800';
+    shadow.querySelector('form')?.dispatchEvent(new Event('submit', { cancelable: true }));
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ enabled: false, after: 800 }));
   });
-  it('opens AI settings only from the menu and keeps invalid configuration open', () => {
-    const save = vi.fn(); destroy = mountControls(() => ({ ...DEFAULTS }), save, vi.fn());
-    vi.mocked(GM_registerMenuCommand).mock.calls[0]?.[1]();
-    const shadow = document.querySelector('[data-ft-owned="controls"]')?.shadowRoot;
-    const provider = shadow?.querySelector<HTMLSelectElement>('[name="provider"]');
-    if (!provider) throw new Error('Missing provider');
-    provider.value = 'ai'; provider.dispatchEvent(new Event('change'));
-    expect(shadow?.querySelector('fieldset')?.hidden).toBe(false);
-    shadow?.querySelector('form')?.dispatchEvent(new Event('submit', { cancelable: true }));
-    expect(save).not.toHaveBeenCalled();
-    for (const [name, value] of [['baseUrl', 'https://example.com/v1'], ['apiKey', 'test-only-key'], ['model', 'test-model']] as const) {
-      const field = shadow?.querySelector<HTMLInputElement>(`[name="${name}"]`);
-      if (field) {
-        if (field instanceof HTMLSelectElement) { const option = document.createElement('option'); option.value = value; option.textContent = value; field.append(option); }
-        field.value = value;
-      }
-    }
-    shadow?.querySelector('form')?.dispatchEvent(new Event('submit', { cancelable: true }));
-    expect(save).toHaveBeenCalledWith({ ...DEFAULTS, provider: 'ai', ai: { ...DEFAULTS.ai, baseUrl: 'https://example.com/v1', apiKey: 'test-only-key', model: 'test-model' } });
-    expect(shadow?.querySelector('[name="apiKey"]')).toBeNull();
+  it('creates AI profiles, saves an empty API Key and activates the selected profile', () => {
+    const onChanged = vi.fn();
+    destroy = mountControls(() => ({ ...DEFAULTS }), vi.fn(), vi.fn(), onChanged);
+    const shadow = open();
+    shadow.querySelector<HTMLButtonElement>('[data-action="new"]')?.click();
+    setField(shadow, 'name', '自定义 DeepSeek');
+    setField(shadow, 'provider', 'ai');
+    setField(shadow, 'baseUrl', 'https://api.deepseek.com');
+    setField(shadow, 'model', 'deepseek-chat');
+    setField(shadow, 'protocol', 'chat-completions');
+    shadow.querySelector<HTMLButtonElement>('[data-action="save"]')?.click();
+    expect(listProfiles().profiles).toHaveLength(2);
+    expect(listProfiles().profiles[1]?.ai.apiKey).toBe('');
+    shadow.querySelector<HTMLButtonElement>('[data-action="activate"]')?.click();
+    expect(activeProfile().name).toBe('自定义 DeepSeek');
+    expect(activeProfile().ai.protocol).toBe('chat-completions');
+    expect(onChanged).toHaveBeenCalled();
   });
-  it('fetches models when AI settings open and cancels on close', async () => {
-    const abort = vi.fn(); let options: GmRequestOptions | undefined;
-    vi.stubGlobal('GM_xmlhttpRequest', (value: GmRequestOptions) => { options = value; return { abort }; });
-    destroy = mountControls(() => ({ ...DEFAULTS, provider: 'ai', ai: { ...DEFAULTS.ai, baseUrl: 'https://example.com/v1', apiKey: 'test-only', model: 'saved' } }), vi.fn(), vi.fn());
-    vi.mocked(GM_registerMenuCommand).mock.calls[0]?.[1]();
-    const shadow = document.querySelector('[data-ft-owned="controls"]')?.shadowRoot;
-    expect(shadow?.querySelector('[name=model]')?.tagName).toBe('SELECT');
-    expect(shadow?.querySelector('#ft-model-status')?.textContent).toContain('正在获取');
-    expect(options?.url).toBe('https://example.com/v1/models');
-    expect(options?.headers?.Authorization).toBe('Bearer test-only');
-    options?.onload?.({ status: 200, responseText: '{"data":[{"id":"model-b"},{"id":"model-a"},{"id":"model-a"}]}' });
-    await Promise.resolve(); await Promise.resolve();
-    expect([...shadow?.querySelectorAll('[name=model] option') ?? []].map(option => (option as HTMLOptionElement).value)).toEqual(['', 'saved', 'model-a', 'model-b']);
-    expect(shadow?.querySelector<HTMLInputElement>('[name=model]')?.value).toBe('saved');
-    const refresh = [...shadow?.querySelectorAll('button') ?? []].find(button => button.textContent === '刷新模型列表'); refresh?.click();
-    shadow?.querySelector<HTMLButtonElement>('header button')?.click();
-    expect(abort).toHaveBeenCalledOnce();
-    expect(shadow?.querySelector('dialog')?.open).toBe(false);
-  });
-  it('autosaves entered credentials and fetches models without applying translation settings', async () => {
-    vi.useFakeTimers(); const save = vi.fn(); const credentials = vi.fn();
-    let options: GmRequestOptions | undefined;
-    vi.stubGlobal('GM_xmlhttpRequest', (value: GmRequestOptions) => { options = value; return { abort: vi.fn() }; });
-    destroy = mountControls(() => ({ ...DEFAULTS, provider: 'ai' }), save, vi.fn(), credentials);
-    vi.mocked(GM_registerMenuCommand).mock.calls[0]?.[1]();
-    const shadow = document.querySelector('[data-ft-owned="controls"]')?.shadowRoot;
-    for (const [name, value] of [['baseUrl', 'http://127.0.0.1:8317/v1'], ['apiKey', 'test-only']] as const) {
-      const field = shadow?.querySelector<HTMLInputElement>(`[name="${name}"]`);
-      if (!field) throw new Error('Missing credential field');
-      field.value = value; field.dispatchEvent(new Event('input')); field.dispatchEvent(new Event('change'));
-    }
-    expect(credentials).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(500);
-    expect(credentials).toHaveBeenCalledExactlyOnceWith('http://127.0.0.1:8317/v1', 'test-only');
-    expect(options?.url).toBe('http://127.0.0.1:8317/v1/models');
-    expect(save).not.toHaveBeenCalled();
-    options?.onload?.({ status: 200, responseText: '{"data":[{"id":"test-model"}]}' });
-    await Promise.resolve(); await Promise.resolve();
-    const model = shadow?.querySelector<HTMLSelectElement>('[name=model]');
-    expect(model?.options[1]?.textContent).toBe('test-model');
-    expect(shadow?.querySelector('#ft-model-status')?.textContent).toContain('已获取 1');
-  });
-  it('switches categories without losing unsaved fields and closes on Escape', () => {
+  it('duplicates a profile with new identity and forbids deleting the last one', () => {
     destroy = mountControls(() => ({ ...DEFAULTS }), vi.fn(), vi.fn());
-    vi.mocked(GM_registerMenuCommand).mock.calls[0]?.[1]();
-    const shadow = document.querySelector('[data-ft-owned="controls"]')?.shadowRoot;
-    shadow?.querySelector<HTMLButtonElement>('#ft-tab-scope')?.click();
-    expect(shadow?.querySelector<HTMLElement>('#ft-panel-api')?.hidden).toBe(true);
-    expect(shadow?.querySelector<HTMLElement>('#ft-panel-scope')?.hidden).toBe(false);
-    shadow?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-    expect(shadow?.querySelector('dialog')?.open).toBe(false);
+    const shadow = open();
+    expect(shadow.querySelector<HTMLButtonElement>('[data-action="remove"]')?.disabled).toBe(true);
+    shadow.querySelector<HTMLButtonElement>('[data-action="clone"]')?.click();
+    const profiles = listProfiles().profiles;
+    expect(profiles).toHaveLength(2);
+    expect(profiles[1]?.id).not.toBe(profiles[0]?.id);
+    expect(profiles[1]?.name).toContain('副本');
+    expect(profiles[1]?.ai.apiKey).toBe('');
+    shadow.querySelector<HTMLButtonElement>('[data-action="remove"]')?.click();
+    expect(listProfiles().profiles).toHaveLength(1);
   });
-  it('unregisters its own menu and UI on shutdown', () => {
-    destroy = mountControls(() => ({ ...DEFAULTS }), vi.fn(), vi.fn()); destroy(); destroy = undefined;
-    expect(GM_unregisterMenuCommand).toHaveBeenCalledWith(1);
-    expect(document.querySelector('[data-ft-owned="controls"]')).toBeNull();
+  it('lists every saved profile in the Tampermonkey quick-menu after reopening settings', () => {
+    destroy = mountControls(() => ({ ...DEFAULTS }), vi.fn(), vi.fn());
+    const shadow = open();
+    shadow.querySelector<HTMLButtonElement>('[data-action="clone"]')?.click();
+    shadow.querySelector<HTMLButtonElement>('header button')?.click();
+    expect(vi.mocked(GM_registerMenuCommand).mock.calls.map(([label]) => label))
+      .toContain('　Google 翻译 副本');
   });
 });
 
-it('automatically loads local fonts only when entering the font tab and saves font settings', () => {
-  const query = vi.fn().mockResolvedValue([]); vi.stubGlobal('queryLocalFonts', query);
-  const save = vi.fn(); destroy = mountControls(() => ({ ...DEFAULTS }), save, vi.fn());
-  vi.mocked(GM_registerMenuCommand).mock.calls[0]?.[1]();
-  const shadow = document.querySelector('[data-ft-owned="controls"]')?.shadowRoot;
-  expect(query).not.toHaveBeenCalled();
-  shadow?.querySelector<HTMLButtonElement>('#ft-tab-fonts')?.click();
-  shadow?.querySelector<HTMLButtonElement>('#ft-tab-scope')?.click();
-  shadow?.querySelector<HTMLButtonElement>('#ft-tab-fonts')?.click();
-  const family = shadow?.querySelector<HTMLInputElement>('[name="font-title-family"]');
-  if (!family) throw new Error('Missing font controls');
-  family.value = 'Microsoft YaHei';
-  shadow?.querySelector<HTMLButtonElement>('#ft-font-scope-body')?.click();
-  const size = shadow?.querySelector<HTMLInputElement>('[name="font-body-size"]');
-  if (!size) throw new Error('Missing body size');
-  size.value = '18';
-  shadow?.querySelector('form')?.dispatchEvent(new Event('submit', { cancelable: true }));
-  expect(save).toHaveBeenCalledWith({ ...DEFAULTS, fonts: { title: { family: 'Microsoft YaHei', size: 0 }, body: { family: '', size: 18 } } });
-  expect(query).toHaveBeenCalledTimes(1);
+describe('Reddit homepage settings access', () => {
+  it('opens the existing full settings dialog from reddit.com/ without Tampermonkey menu', async () => {
+    const route = { hostname: 'www.reddit.com', pathname: '/', href: 'https://www.reddit.com/' };
+    vi.stubGlobal('location', route);
+    destroy = mountControls(() => ({ ...DEFAULTS }), vi.fn(), vi.fn());
+    const host = document.querySelector<HTMLElement>('[data-ft-owned="reddit-home-settings"]');
+    const button = host?.shadowRoot?.querySelector<HTMLButtonElement>('button');
+    expect(button).toBeTruthy();
+    expect(button?.hidden).toBe(false);
+    button?.click();
+    const dialog = document.querySelector<HTMLElement>('[data-ft-owned="controls"]')?.shadowRoot?.querySelector('dialog');
+    expect(dialog?.open).toBe(true);
+    expect(dialog?.textContent).toContain('翻译配置');
+    expect(dialog?.textContent).toContain('我的 Profile');
+    expect(button?.hidden).toBe(true);
+    dialog?.querySelector<HTMLButtonElement>('header button')?.click();
+    expect(dialog?.open).toBe(false);
+    expect(button?.hidden).toBe(false);
+
+    // Navigation to a subreddit hides the entry even with no full reload.
+    route.pathname = '/r/selfhosted/';
+    route.href = 'https://www.reddit.com/r/selfhosted/';
+    document.body.append(document.createElement('span'));
+    await vi.waitFor(() => expect(button?.hidden).toBe(true));
+
+    route.pathname = '/';
+    route.href = 'https://www.reddit.com/';
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(button?.hidden).toBe(false);
+  });
+
+  it('does not show a Reddit homepage shortcut on X or subreddit routes', () => {
+    const route = { hostname: 'x.com', pathname: '/home', href: 'https://x.com/home' };
+    vi.stubGlobal('location', route);
+    destroy = mountControls(() => ({ ...DEFAULTS }), vi.fn(), vi.fn());
+    expect(document.querySelector('[data-ft-owned="reddit-home-settings"]')).toBeNull();
+    destroy();
+    destroy = undefined;
+    route.hostname = 'www.reddit.com';
+    route.pathname = '/r/test/';
+    route.href = 'https://www.reddit.com/r/test/';
+    destroy = mountControls(() => ({ ...DEFAULTS }), vi.fn(), vi.fn());
+    const button = document.querySelector<HTMLElement>('[data-ft-owned="reddit-home-settings"]')?.shadowRoot?.querySelector<HTMLButtonElement>('button');
+    expect(button?.hidden).toBe(true);
+  });
 });

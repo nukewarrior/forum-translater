@@ -1,8 +1,7 @@
 import type { RedditThreadContext } from '../reddit-context';
 import { measureRequest } from './metrics';
 import { TRANSLATION_PROMPT_VERSION } from './translation-prompt';
-import { TRANSLATION_PROMPT, COMBINED_TRANSLATION_PROMPT } from './translation-prompt';
-import { JsonArrayStream } from './json-array';
+import { TRANSLATION_PROMPT } from './translation-prompt';
 // Responses decoding adapted from Hacker News Reader Lite (MIT, sunbigfly 2026).
 import { translationProtectedTokensMatch } from "./translation-text";
 import { normalizeAiBaseUrl, validateAiProfile, type AiProfile } from "../settings";
@@ -69,23 +68,6 @@ function streamedJsonRecord(raw: string): Readonly<Record<string, StreamedJsonVa
   }
   return Object.freeze(values);
 }
-
-function vocabularyStart(raw: string): number | undefined {
-  let cursor = raw.indexOf('{') + 1;
-  if (!cursor) return;
-  for (;;) {
-    while (/[\s,]/.test(raw[cursor] ?? '') && cursor < raw.length) cursor++;
-    const key = streamedJsonString(raw, cursor); if (!key) return;
-    cursor = key.next;
-    while (/\s/.test(raw[cursor] ?? '') && cursor < raw.length) cursor++;
-    if (raw[cursor++] !== ':') return;
-    while (/\s/.test(raw[cursor] ?? '') && cursor < raw.length) cursor++;
-    if (key.value === 'vocabulary') return cursor;
-    const value = streamedJsonString(raw, cursor); if (!value) return;
-    cursor = value.next;
-  }
-}
-
 
 interface ResponseOutput {
   readonly status?: unknown;
@@ -154,15 +136,14 @@ export class ResponseStreamDecoder {
   }
 
   #consumeEvent(event: string): void {
-    for (const line of event.split(/\r?\n/)) {
-      if (!line.startsWith("data:")) continue;
-      const data = line.slice(5).trim();
-      if (!data) continue;
-      if (data === "[DONE]") {
-        this.#done = true;
-        continue;
-      }
-      const payload = JSON.parse(data) as {
+    const lines = event.split(/\r?\n/);
+    const eventName = lines.find(line => line.startsWith('event:'))?.slice(6).trim();
+    // Proxies may provide the event name only in SSE's event: field; the
+    // JSON data payload does not always contain a top-level type.
+    const data = lines.filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
+    if (!data) return;
+    if (data === '[DONE]') { this.#done = true; return; }
+    const payload = JSON.parse(data) as {
         readonly type?: unknown;
         readonly delta?: unknown;
         readonly text?: unknown;
@@ -170,21 +151,124 @@ export class ResponseStreamDecoder {
         readonly error?: ResponseOutput['error'];
         readonly response?: ResponseOutput & { usage?: unknown };
       };
-      if (payload.response?.usage) this.onUsage?.(payload.response.usage);
-      if (payload.type === "response.output_text.delta" && typeof payload.delta === "string") {
-        this.#publish(this.#content + payload.delta);
-      } else if (payload.type === "response.output_text.done" && typeof payload.text === "string") {
-        this.#publish(payload.text);
-      } else if (payload.type === "response.completed" && payload.response && !this.#content) {
+    const type = typeof payload.type === 'string' ? payload.type : eventName;
+    if (payload.response?.usage) this.onUsage?.(payload.response.usage);
+    if (type === 'response.output_text.delta' && typeof payload.delta === 'string') {
+      this.#publish(this.#content + payload.delta);
+    } else if (type === 'response.output_text.done' && typeof payload.text === 'string') {
+      this.#publish(payload.text);
+    } else if (type === 'response.completed') {
+      if (payload.response?.status === 'failed' || payload.response?.status === 'incomplete' || payload.response?.error) {
+        this.#failure = responseFailure(payload.response.error, 'AI 响应未完成');
+      } else if (payload.response && !this.#content) {
         this.#publish(decodeResponseOutput(payload.response));
-      } else if (payload.type === "response.failed" || payload.type === "response.incomplete" || payload.type === "error") {
-        this.#failure = responseFailure(payload.response?.error ?? payload.error ?? payload, "AI 响应失败");
       }
-      if (payload.type === "response.completed" || payload.type === "response.failed") this.#done = true;
+    } else if (type === 'response.failed' || type === 'response.incomplete' || type === 'error') {
+      this.#failure = responseFailure(payload.response?.error ?? payload.error ?? payload, 'AI 响应失败');
+    }
+    if (type === 'response.completed' || type === 'response.failed' || type === 'response.incomplete') this.#done = true;
+  }
+}
+
+
+
+export function decodeChatCompletion(body: string): string {
+  const parsed = JSON.parse(body) as {
+    error?: { message?: string; code?: string };
+    choices?: { message?: { content?: unknown }; finish_reason?: string }[];
+  };
+  if (parsed.error) throw new Error(parsed.error.code === 'usage_limit_reached'
+    ? '当前模型额度已用尽（usage_limit_reached）' : parsed.error.message ?? 'AI 响应失败');
+  const choice = parsed.choices?.[0];
+  if (choice?.finish_reason === 'length') throw new Error('AI 输出超过长度限制，译文不完整');
+  const content = choice?.message?.content;
+  if (typeof content !== 'string' || !content.trim()) throw new Error('AI 未返回文本结果');
+  return content.trim();
+}
+
+/** OpenAI-compatible Chat Completions SSE; never render reasoning_content. */
+export class ChatCompletionStreamDecoder {
+  #received = '';
+  #pending = '';
+  #content = '';
+  #done = false;
+  #failure: Error | undefined;
+
+  constructor(readonly onContent?: (content: string) => void, readonly onUsage?: (usage: unknown) => void) {}
+  get done(): boolean { return this.#done; }
+  get content(): string { return this.#content; }
+
+  push(body: string, final = false): string {
+    const chunk = body.startsWith(this.#received) ? body.slice(this.#received.length) : body;
+    this.#received = body.startsWith(this.#received) ? body : this.#received + body;
+    this.#pending += chunk;
+    for (;;) {
+      const separator = /\r?\n\r?\n/.exec(this.#pending);
+      if (!separator || separator.index === undefined) break;
+      const event = this.#pending.slice(0, separator.index);
+      this.#pending = this.#pending.slice(separator.index + separator[0].length);
+      this.#consumeEvent(event);
+    }
+    if (final && this.#pending.trim()) {
+      this.#consumeEvent(this.#pending);
+      this.#pending = '';
+    }
+    if (this.#failure) throw this.#failure;
+    return this.#content;
+  }
+
+  #consumeEvent(event: string): void {
+    for (const line of event.split(/\r?\n/)) {
+      if (!line.startsWith('data:')) continue;
+      const data = line.slice(5).trim();
+      if (!data) continue;
+      if (data === '[DONE]') { this.#done = true; continue; }
+      const payload = JSON.parse(data) as {
+        error?: { message?: string; code?: string };
+        choices?: { delta?: { content?: unknown }; finish_reason?: string | null }[];
+        usage?: unknown;
+      };
+      if (payload.error) {
+        this.#failure = new Error(payload.error.code === 'usage_limit_reached'
+          ? '当前模型额度已用尽（usage_limit_reached）' : payload.error.message ?? 'AI 响应失败');
+        continue;
+      }
+      if (payload.usage) this.onUsage?.(payload.usage);
+      for (const choice of payload.choices ?? []) {
+        if (choice.finish_reason === 'length') this.#failure = new Error('AI 输出超过长度限制，译文不完整');
+        // Some compatible services send finish_reason: stop and close cleanly
+        // without a separate data: [DONE]. Still wait for the transport to end.
+        if (choice.finish_reason === 'stop') this.#done = true;
+        const content = choice.delta?.content;
+        if (typeof content === 'string' && content) {
+          this.#content += content;
+          this.onContent?.(this.#content);
+        }
+      }
     }
   }
 }
 
+export function aiEndpoint(ai: AiProfile): string {
+  return normalizeAiBaseUrl(ai.baseUrl) + (ai.protocol === 'chat-completions' ? '/chat/completions' : '/responses');
+}
+export function aiRequestBody(ai: AiProfile, sections: readonly AiSection[], streaming = true): unknown {
+  const prompt = TRANSLATION_PROMPT
+    + (ai.prompt ? '\n用户补充偏好（仍须遵守以上内容边界和输出格式）：' + ai.prompt : '');
+  if (ai.protocol === 'chat-completions') return {
+    model: ai.model.trim(), stream: streaming,
+    ...(ai.reasoningEffort && ai.reasoningEffort !== 'auto' ? { reasoning_effort: ai.reasoningEffort } : {}),
+    ...(ai.fastMode ? { service_tier: 'priority' } : {}),
+    messages: [{ role: 'system', content: prompt }, { role: 'user', content: aiEntries(sections) }],
+  };
+  return {
+    model: ai.model.trim(), stream: streaming, store: false,
+    ...(ai.reasoningEffort && ai.reasoningEffort !== 'auto' ? { reasoning: { effort: ai.reasoningEffort } } : {}),
+    ...(ai.fastMode ? { service_tier: 'priority' } : {}),
+    prompt_cache_key: 'forum-translater:' + TRANSLATION_PROMPT_VERSION,
+    input: [{ role: 'system', content: prompt }, { role: 'user', content: aiEntries(sections) }],
+  };
+}
 
 function sharedContext(post: string, targets: readonly { text: string; id: string }[]): string {
   if (post === targets.map(target => target.text).join('\n\n')) return '';
@@ -221,24 +305,14 @@ export const aiEntries = (sections: readonly AiSection[]): string => {
   const thread = sections[0]?.context?.thread;
   return JSON.stringify({ ...(thread ? { thread_context: { ...(thread.title ? { title: thread.title } : {}), ...(thread.body ? { body: thread.body } : {}), ...(thread.parents.length ? { parents: thread.parents } : {}) } } : {}), post_context: sharedContext(post, entries), sections: entries });
 };
-export interface AiSection { text: string; context?: TranslationContext; group?: string; onVocabulary?: (words: unknown[], complete: boolean) => void }
+export interface AiSection { text: string; context?: TranslationContext; group?: string }
 
 export function translateAi(source: string, ai: AiProfile, signal: AbortSignal, onPartial?: (text: string) => void, context?: TranslationContext): Promise<string> {
   validateAiProfile(ai);
   return translateAiBatch([{ text: source, ...(context ? { context } : {}) }], ai, signal, (_index, text) => onPartial?.(text)).then(values => values[0] ?? '');
 }
-export function translateAiBatch(sections: readonly AiSection[], ai: AiProfile, signal: AbortSignal, onPartial?: (index: number, text: string, complete: boolean) => void): Promise<string[]> {
+export function translateAiBatch(sections: readonly AiSection[], ai: AiProfile, signal: AbortSignal, onPartial?: (index: number, text: string, complete: boolean) => void, nonStream = false): Promise<string[]> {
   validateAiProfile(ai);
-  const combined = sections.some(section => section.onVocabulary);
-  const publishedWordCounts = new Map<number, number>();
-  const publishWords = (words: unknown[], complete: boolean): void => {
-    sections.forEach((section, index) => {
-      if (!section.onVocabulary) return;
-      const selected = words.filter(word => word && typeof word === 'object' && 'section' in word && word.section === `section_${index}`);
-      if (!complete && selected.length === (publishedWordCounts.get(index) ?? 0)) return;
-      publishedWordCounts.set(index, selected.length); section.onVocabulary(selected, complete);
-    });
-  };
   const entries = sections.map((section, index) => ({ id: `section_${index}`, text: section.text, before: section.context?.before ?? '', after: section.context?.after ?? '' }));
   const published = new Map<number, StreamedJsonValue>();
   let markContent: (() => void) | undefined;
@@ -266,12 +340,8 @@ export function translateAiBatch(sections: readonly AiSection[], ai: AiProfile, 
       publishTranslation(index, value, true);
       return value;
     });
-    if (Object.keys(values).length !== entries.length + Number(combined)) throw new Error('AI 译文段落不匹配');
+    if (Object.keys(values).length !== entries.length) throw new Error('AI 译文段落不匹配');
     if (invalidTranslation) throw new Error('AI 译文占位符不匹配');
-    if (combined) {
-      if (!Array.isArray(record.vocabulary)) throw new Error('AI 词汇格式不匹配');
-      publishWords(record.vocabulary, true);
-    }
     return translations;
   };
   return new Promise((resolve, reject) => {
@@ -280,19 +350,28 @@ export function translateAiBatch(sections: readonly AiSection[], ai: AiProfile, 
     let handle: { abort(): void } | undefined;
     const metric = measureRequest('translation', { sections: sections.length, model: ai.model, effort: ai.reasoningEffort ?? 'low', fast: ai.fastMode === true });
     markContent = () => metric.content();
-    const stream = new ResponseStreamDecoder(() => metric.milestone('first-output-delta'), usage => metric.usage(usage));
-    const vocabularyStream = new JsonArrayStream();
-    let vocabularyOffset: number | undefined;
-    let vocabularyRead = 0;
-    let wordCount = 0;
+    const stream = ai.protocol === 'chat-completions'
+      ? new ChatCompletionStreamDecoder(() => metric.milestone('first-output-delta'), usage => metric.usage(usage))
+      : new ResponseStreamDecoder(() => metric.milestone('first-output-delta'), usage => metric.usage(usage));
+    let terminalTimer: ReturnType<typeof setTimeout> | undefined;
+    let watchdog: ReturnType<typeof setTimeout>;
     const finish = (action: () => void): void => {
       if (settled) return;
-      settled = true; clearTimeout(watchdog); signal.removeEventListener('abort', abort); action(); metric.finish(false);
+      settled = true; clearTimeout(watchdog); clearTimeout(terminalTimer);
+      signal.removeEventListener('abort', abort); action(); metric.finish(false);
     };
     const abort = (): void => { finish(() => reject(new DOMException('已取消', 'AbortError'))); handle?.abort(); };
-    const watchdog = setTimeout(() => { finish(() => reject(new Error('AI 翻译超过 60 秒，请重试或切换模型'))); handle?.abort(); }, 60000);
+    const resetIdleTimeout = (): void => {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => {
+        finish(() => reject(new Error('AI 翻译超过 60 秒没有产生新内容，已终止请求')));
+        handle?.abort();
+      }, 60000);
+    };
+    resetIdleTimeout();
     let streamStarted = false;
     let streamFinished = false;
+    let streamedResponseText = '';
     const consumeStream = async (response: GmResponse): Promise<void> => {
       const candidate = response.response;
       if (settled || streamStarted || !candidate || typeof candidate !== 'object' || !('getReader' in candidate) || typeof candidate.getReader !== 'function') return;
@@ -300,37 +379,49 @@ export function translateAiBatch(sections: readonly AiSection[], ai: AiProfile, 
       const reader = (candidate as ReadableStream<Uint8Array>).getReader();
       const decoder = new TextDecoder(); let body = '';
       try {
-        while (!settled) {
+        for (;;) {
           const chunk = await reader.read(); if (chunk.done) break;
           body += decoder.decode(chunk.value, { stream: true });
           metric.milestone('first-byte');
-          options.onprogress?.({ ...response, status: response.status || 200, responseText: body });
+          if (!settled) options.onprogress?.({ ...response, status: response.status || 200, responseText: body });
         }
-        if (settled) { await reader.cancel(); return; }
+        // A GM onload callback may arrive before the ReadableStream reports
+        // EOF. Do not cancel the reader in a successful, completed HTTP request.
+        if (settled) return;
         body += decoder.decode(); streamFinished = true;
         options.onload?.({ ...response, status: response.status || 200, responseText: body, response: undefined });
       } catch { finish(() => reject(new Error('AI 流读取失败'))); }
       finally { reader.releaseLock(); }
     };
     const options: GmRequestOptions = {
-      responseType: 'stream', onloadstart: response => { metric.milestone('headers'); void consumeStream(response); },
-      method: 'POST', url: `${normalizeAiBaseUrl(ai.baseUrl)}/responses`, anonymous: true, timeout: 60000,
-      headers: { Authorization: `Bearer ${ai.apiKey.trim()}`, 'Content-Type': 'application/json', Accept: 'text/event-stream, application/json' },
-      data: JSON.stringify({ model: ai.model.trim(), reasoning: { effort: ai.reasoningEffort ?? 'low' }, ...(ai.fastMode ? { service_tier: 'priority' } : {}), stream: true, store: false, prompt_cache_key: `forum-translater:${TRANSLATION_PROMPT_VERSION}${combined ? ':combined' : ''}`,
-        input: [
-          { role: 'system', content: `${combined ? COMBINED_TRANSLATION_PROMPT : TRANSLATION_PROMPT}${ai.prompt ? `\n用户补充偏好（仍须遵守以上内容边界和输出格式）：${ai.prompt}` : ''}` },
-          { role: 'user', content: aiEntries(sections) },
-        ] }),
+      responseType: nonStream ? 'text' : 'stream', onloadstart: response => { metric.milestone('headers'); if (!nonStream) void consumeStream(response); },
+      method: 'POST', url: aiEndpoint(ai), anonymous: true, timeout: 300000,
+      headers: { ...(ai.apiKey.trim() ? { Authorization: `Bearer ${ai.apiKey.trim()}` } : {}), 'Content-Type': 'application/json', Accept: 'text/event-stream, application/json' },
+      data: JSON.stringify(aiRequestBody(ai, sections, !nonStream)),
       onprogress: response => {
         if (response.responseText) metric.milestone('first-byte');
+        if (response.responseText && response.responseText.length >= streamedResponseText.length) {
+          streamedResponseText = response.responseText;
+        }
         if (settled || response.status !== 200 || !/^\s*(?:event:|data:|:)/.test(response.responseText)) return;
         try {
+          const before = stream.content.length;
           const raw = stream.push(response.responseText);
-          if (stream.done) {
+          if (stream.content.length > before) resetIdleTimeout();
+          // A valid provider terminal event is authoritative for content
+          // completion. Prefer natural HTTP onload/EOF, but Tampermonkey stream
+          // readers may never signal their last read on some proxy chains.
+          // After a short grace period, resolve WITHOUT aborting the transport.
+          // The reader continues draining until the remote side closes.
+          if (stream.done && terminalTimer === undefined) {
             const values = decodeValues(raw);
-            metric.finish(true); finish(() => resolve(values)); handle?.abort(); return;
+            clearTimeout(watchdog);
+            terminalTimer = setTimeout(() => {
+              if (settled) return;
+              metric.finish(true);
+              finish(() => resolve(values));
+            }, 1500);
           }
-          // Once a section is complete, vocabulary deltas must not reparse its text.
           if (entries.some((_entry, index) => !published.get(index)?.complete)) {
             const partials = streamedJsonRecord(raw);
             entries.forEach((entry, index) => {
@@ -341,42 +432,46 @@ export function translateAiBatch(sections: readonly AiSection[], ai: AiProfile, 
               publishTranslation(index, partial, complete);
             });
           }
-          if (combined) {
-            vocabularyOffset ??= vocabularyStart(raw);
-            if (vocabularyOffset !== undefined) {
-              const words = vocabularyStream.push(raw.slice(vocabularyOffset + vocabularyRead));
-              vocabularyRead = raw.length - vocabularyOffset;
-              if (words.length !== wordCount) { wordCount = words.length; publishWords([...words], false); }
-            }
-          }
-          // Incomplete JSON is normal while streaming; do not throw/parse it per token.
-          const ending = raw.trimEnd();
-          if (!ending.endsWith('}') && !ending.endsWith('```')) return;
-          let values: string[];
-          try { values = decodeValues(raw); } catch { return; }
-          stream.push(response.responseText, true);
-          metric.finish(true); finish(() => resolve(values)); handle?.abort();
+          // A syntactically complete translation is safe to preview, but not to
+          // cache or resolve until the transport ends successfully. In particular,
+          // do not abort the request or cancel its reader on the success path.
         } catch (error) {
           preserveCompletedTranslations(stream.content);
           finish(() => reject(error instanceof Error && !(error instanceof SyntaxError) ? error : new Error('AI 流式 JSON 无法解析'))); handle?.abort();
         }
       },
       onload: response => {
-        if (response.response && typeof response.response === 'object' && 'getReader' in response.response) { void consumeStream(response); return; }
-        if (streamStarted && !streamFinished) return;
+        // Some Tampermonkey implementations fire HTTP onload before their
+        // responseType=stream reader signals EOF. onload is an independent
+        // indication of natural network completion: never discard it solely
+        // because a reader is still active.
+        if (streamStarted && !streamFinished && !stream.done) return;
+        if (!streamStarted && response.response && typeof response.response === 'object' && 'getReader' in response.response) {
+          void consumeStream(response); return;
+        }
+        const responseText = response.responseText || streamedResponseText;
         finish(() => {
         try {
-          const payload = JSON.parse(response.responseText) as { error?: { type?: string; code?: string } };
+          const payload = JSON.parse(responseText) as { error?: { type?: string; code?: string } };
           if (payload.error?.type === 'usage_limit_reached' || payload.error?.code === 'usage_limit_reached') {
             reject(new Error('当前模型额度已用尽（usage_limit_reached），请切换可用模型或等待额度恢复')); return;
           }
         } catch { /* Streaming responses are decoded below. */ }
-        if (response.status < 200 || response.status >= 300) { reject(new Error(`AI 翻译 HTTP ${response.status}`)); return; }
+        if (response.status < 200 || response.status >= 300) {
+          // Retry just once without streaming only when the provider explicitly refuses streaming.
+          const text = responseText.toLowerCase();
+          if (!nonStream && !stream.content && [400, 422].includes(response.status)
+              && /(?:stream|streaming)/.test(text) && /(?:unsupported|not support|not supported|不支持|invalid|disabled)/.test(text)) {
+            void translateAiBatch(sections, ai, signal, onPartial, true).then(resolve, reject);
+            return;
+          }
+          reject(new Error(`AI 翻译 HTTP ${response.status}`)); return;
+        }
         try {
-          const isStream = /^\s*(?:event:|data:|:)/.test(response.responseText);
-          const raw = isStream ? stream.push(response.responseText, true) : decodeResponse(response.responseText);
+          const isStream = /^\s*(?:event:|data:|:)/.test(responseText) || stream.done;
+          const raw = isStream ? stream.push(responseText, true) : ai.protocol === 'chat-completions' ? decodeChatCompletion(responseText) : decodeResponse(responseText);
           if (isStream && !stream.done) throw new Error('AI 响应未完整结束');
-          if (!isStream) metric.usage((JSON.parse(response.responseText) as { usage?: unknown }).usage);
+          if (!isStream) metric.usage((JSON.parse(responseText) as { usage?: unknown }).usage);
           const values = decodeValues(raw); metric.content(); metric.finish(true); resolve(values);
         } catch (error) {
           preserveCompletedTranslations(stream.content);

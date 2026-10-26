@@ -3,8 +3,6 @@ import { TRANSLATION_PROMPT_VERSION } from './translation-prompt';
 import { normalizeAiBaseUrl, type Settings } from '../settings';
 import type { TranslationTaskPriority } from './translation-task-manager';
 import { TranslationWorkerController } from './worker-controller';
-import { CombinedVocabulary } from './combined-vocabulary';
-import { collectVocabulary, type VocabularyWord } from '../vocabulary';
 export { splitText } from './worker-controller';
 import { cacheHit, measureRequest } from './metrics';
 import type { TranslationContext } from './ai';
@@ -56,11 +54,7 @@ export class TranslationCache {
   }
 }
 export class TranslationService {
-  private vocabulary: CombinedVocabulary;
-  hasVocabulary(source: string): boolean { return this.vocabulary.hasPost(source); }
-  watchVocabulary(source: string, callback: (words: VocabularyWord[]) => void): () => void { return this.vocabulary.watch(source, callback); }
   private aiInflight = new Map<string, { controller: AbortController; promise: Promise<string>; partial?: string }>();
-  private vocabularyInflight = new Map<string, { controller: AbortController; promise: Promise<void> }>();
   private foregroundOwner: string | undefined;
   setForeground(owner?: string): void { this.foregroundOwner = owner; this.worker.batcher.setForeground(owner ? this.pendingKeys.get(owner) ?? [] : []); }
   private partialListeners = new Map<string, Set<(text: string) => void>>();
@@ -70,7 +64,6 @@ export class TranslationService {
   private pendingKeys = new Map<string, Set<string>>();
   constructor(readonly settings: Settings, readonly cache: TranslationCache) {
     this.worker = new TranslationWorkerController(settings.ai);
-    this.vocabulary = new CombinedVocabulary(JSON.stringify([TRANSLATION_PROMPT_VERSION, settings.ai.baseUrl, settings.ai.model, settings.ai.prompt]));
   }
   promote(owner: string, priority: 'visible' | 'interactive'): void {
     this.priorities.set(owner, priority);
@@ -106,9 +99,8 @@ export class TranslationService {
       signal.throwIfAborted();
       if (!translationBlockNeedsTranslation(source.replace(/⟦\d+⟧/g, ''), true)) { values.push(source); continue; }
       const ai = this.settings.provider === 'ai' ? this.settings.ai : undefined;
-      const serviceKey = ai ? `ai:${normalizeAiBaseUrl(ai.baseUrl)}:${ai.model}` : this.settings.provider;
-      const combinedSource = ai && this.settings.vocabulary ? context?.post ?? text : undefined;
-      const identity = JSON.stringify([serviceKey, ai ? TRANSLATION_PROMPT_VERSION : '', ai?.prompt ?? '', ai ? context ?? null : null, !!combinedSource, 'zh-CN', source]);
+      const serviceKey = ai ? `ai:${this.settings.profileId}:${this.settings.profileRevision}:${normalizeAiBaseUrl(ai.baseUrl)}:${ai.model}` : `${this.settings.profileId}:${this.settings.profileRevision}:${this.settings.provider}`;
+      const identity = JSON.stringify([serviceKey, ai ? TRANSLATION_PROMPT_VERSION : '', ai?.prompt ?? '', ai ? context ?? null : null, 'zh-CN', source]);
       const resumePrefetch = ai && priority !== 'prefetch' ? this.tasks.holdPrefetch(signal) : undefined;
       let key: string;
       try { key = await translationTextFingerprint([identity], crypto.subtle); }
@@ -118,10 +110,6 @@ export class TranslationService {
       if (cached !== undefined) {
         const formatted = this.worker.format(source, cached);
         onPartial?.(values.join('') + formatted);
-        if (combinedSource && !this.vocabulary.has(combinedSource, key) && !this.worker.batcher.hasPendingVocabulary(key)) {
-          // Missing optional vocabulary must never cause a paid translation to run again.
-          this.refillVocabulary(key, source, combinedSource, formatted);
-        }
         values.push(formatted); continue;
       }
       let keys = this.pendingKeys.get(owner);
@@ -137,7 +125,7 @@ export class TranslationService {
           let inflight = this.aiInflight.get(key);
           if (!inflight) {
             const controller = new AbortController();
-            const promise = this.worker.batcher.request(key, { text: source, group: owner, ...(context ? { context } : {}), ...(combinedSource ? { onVocabulary: (raw: unknown[], complete: boolean) => { if (!controller.signal.aborted) this.vocabulary.publish(combinedSource, key, raw, complete); } } : {}) }, this.priorities.get(owner) ?? priority, controller.signal,
+            const promise = this.worker.batcher.request(key, { text: source, group: owner, ...(context ? { context } : {}),  }, this.priorities.get(owner) ?? priority, controller.signal,
               partial => {
                 const active = this.aiInflight.get(key);
                 if (active?.controller === controller) active.partial = partial;
@@ -148,7 +136,7 @@ export class TranslationService {
             inflight = { controller, promise }; this.aiInflight.set(key, inflight);
           } else {
             if (priority === 'visible' || priority === 'interactive') this.worker.batcher.promote(key, priority);
-            // A remounted view should not wait for the next token or vocabulary tail.
+            // A remounted view should not wait for the next token.
             if (inflight.partial !== undefined) listener(inflight.partial);
           }
           const translated = await new Promise<string>((resolve, reject) => {
@@ -180,18 +168,6 @@ export class TranslationService {
     }
     return this.worker.format(text, values.join(''));
   }
-  private refillVocabulary(key: string, source: string, post: string, translation: string): void {
-    if (this.vocabularyInflight.has(key)) return;
-    const controller = new AbortController();
-    const publish = (words: VocabularyWord[], complete: boolean): void => {
-      if (!controller.signal.aborted) this.vocabulary.publish(post, key, words, complete);
-    };
-    const promise = collectVocabulary(source, this.settings, this.tasks, controller.signal, translation, words => publish(words, false))
-      .then(words => publish(words, true))
-      .catch(() => { /* Optional vocabulary failure must preserve the cached translation. */ })
-      .finally(() => { if (this.vocabularyInflight.get(key)?.controller === controller) this.vocabularyInflight.delete(key); });
-    this.vocabularyInflight.set(key, { controller, promise });
-  }
-  destroy(): void { for (const entry of this.aiInflight.values()) entry.controller.abort(); this.aiInflight.clear(); for (const entry of this.vocabularyInflight.values()) entry.controller.abort(); this.vocabularyInflight.clear(); this.worker.destroy(); this.partialListeners.clear(); this.vocabulary.clearListeners(); this.priorities.clear(); this.pendingKeys.clear(); this.foregroundOwner = undefined; this.cache.flush(); }
+  destroy(): void { for (const entry of this.aiInflight.values()) entry.controller.abort(); this.aiInflight.clear(); this.worker.destroy(); this.partialListeners.clear(); this.priorities.clear(); this.pendingKeys.clear(); this.foregroundOwner = undefined; this.cache.flush(); }
   resetPending(): void { this.destroy(); this.worker = new TranslationWorkerController(this.settings.ai); }
 }

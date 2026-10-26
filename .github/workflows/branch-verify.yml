@@ -1,0 +1,41 @@
+name: Branch Verification
+on:
+  push:
+    branches: [main, feat/multi-profile-openai-compatible]
+  workflow_dispatch:
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run verify
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forum-translator-0.3.2-userscript
+          path: |
+            dist/forum-translator.user.js
+            dist/forum-translator.user.js.build.json
+          retention-days: 14
+      - name: Commit verified userscript to feature branch
+        if: github.ref_name == 'feat/multi-profile-openai-compatible'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Stale CI runs must not overwrite a newer source commit's build.
+          git fetch origin feat/multi-profile-openai-compatible
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/feat/multi-profile-openai-compatible)" ]; then
+            echo "Source branch moved while CI was running; skip stale artifact commit"
+            exit 0
+          fi
+          git add main.js dist/forum-translator.user.js dist/forum-translator.user.js.build.json
+          if ! git diff --cached --quiet; then
+            git commit -m "build: refresh verified userscript [skip ci]"
+            git push origin HEAD:feat/multi-profile-openai-compatible
+          fi

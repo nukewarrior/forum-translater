@@ -21,17 +21,26 @@ function boot(): void {
   let runtime: RedditRuntime | undefined;
   const restart = (): void => {
     runtime?.destroy(); runtime = undefined;
-    if (settings.enabled) runtime = new RedditRuntime(settings, new TranslationService(settings, cache));
+    if (settings.enabled) runtime = new RedditRuntime(settings, new TranslationService(settings, cache), () => {
+      const next = loadSettings();
+      if (next.profileId === settings.profileId && next.profileRevision === settings.profileRevision) return false;
+      settings = next;
+      queueMicrotask(restart);
+      return true;
+    });
+  };
+  const reloadProfile = (): void => {
+    const next = loadSettings();
+    settings = next;
+    layout.update(next); fonts.update(next.fonts);
+    restart();
   };
   const removeControls = mountControls(() => ({ ...settings, translationOnly: loadTranslationOnly() }), next => {
     const styleOnly = JSON.stringify({ ...settings, fonts: next.fonts, translationTheme: next.translationTheme, xCollapseSidebar: next.xCollapseSidebar, xHideFloatingIcons: next.xHideFloatingIcons, xHideRightSidebar: next.xHideRightSidebar, xHideAds: next.xHideAds }) === JSON.stringify(next);
     settings = next; saveTranslationOnly(next.translationOnly); saveSettings(next);
     layout.update(next); fonts.update(next.fonts);
     if (styleOnly && runtime) runtime.setTranslationTheme(next.translationTheme); else restart();
-  }, () => cache.clear(), (baseUrl, apiKey) => {
-    const next = { ...settings, ai: { ...settings.ai, baseUrl, apiKey } };
-    saveSettings(next); settings = next;
-  });
+  }, () => cache.clear(), reloadProfile);
   restart();
   window.addEventListener('pagehide', event => {
     runtime?.destroy(); runtime = undefined; cache.flush();

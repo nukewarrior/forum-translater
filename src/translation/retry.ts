@@ -1,5 +1,5 @@
 export function retryableTranslationError(error: unknown): boolean {
-  if (!(error instanceof Error) || error.name === 'AbortError') return false;
+  if (!(error instanceof Error) || (error.name === 'AbortError' || error.name === 'PartialTranslationError')) return false;
   if (/usage_limit_reached/.test(error.message)) return false;
   if (/HTTP\s+(?:401|403|400|404|422)\b/.test(error.message) || /配置|API Key|启动失败/.test(error.message)) return false;
   return /网络|超时|超过 60 秒|流读取|响应|格式|占位符|标记|HTTP\s+(?:408|429|5\d\d)\b/.test(error.message);
