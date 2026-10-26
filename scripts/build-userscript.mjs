@@ -21,7 +21,8 @@ await writeFile(path.join(root, 'main.js'), content);
 const mainPath = path.join(root, 'main.js');
 const mount = mainPath.match(/^\/mnt\/([a-z])\/(.+)$/i);
 const url = mount ? `file:///${mount[1].toUpperCase()}:/${mount[2].split('/').map(encodeURIComponent).join('/')}` : pathToFileURL(mainPath).href;
-const loader = meta.replace(/^(\/\/ @name\s+).+$/m, '$1[DEV] forum-translator · Local Loader')
+const devMeta = meta.replace(/^\/\/ @(?:updateURL|downloadURL)\s+.*\n/gm, '');
+const loader = devMeta.replace(/^(\/\/ @name\s+).+$/m, '$1[DEV] forum-translator · Local Loader')
   .replace(/^(\/\/ @namespace\s+).+$/m, '$1local.forum-translater.dev')
   .replace('// ==/UserScript==', `// @updateURL    none\n// @downloadURL  none\n// @require      ${url}\n// ==/UserScript==`);
 await writeFile(path.join(root, 'dev.user.js'), `${loader}\n\nconsole.info('[forum-translator DEV] 已加载 Windows 本地文件。');\n`);
