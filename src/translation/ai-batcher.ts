@@ -82,20 +82,26 @@ export class AiBatcher {
         batch.attempt++;
         const remaining = unique.filter(item => jobs.some(job => job.key === item.key && !job.cancelled && !job.delivered));
         if (!remaining.length) return;
-        const deliver = (index: number, text: string, complete: boolean): void => {
+        const preview = (index: number, text: string, _complete: boolean): void => {
           const key = remaining[index]?.key;
-          for (const job of jobs) if (job.key === key && !job.cancelled && !job.delivered) {
-            job.partial(text);
-            if (complete) { job.delivered = true; job.resolve(text); }
-          }
+          // Show validated text immediately, but do not resolve the paragraph:
+          // a complete JSON section can precede a failed SSE or an HTTP abort.
+          for (const job of jobs) if (job.key === key && !job.cancelled && !job.delivered) job.partial(text);
         };
         const characters = aiEntries(remaining).length;
         const priority = jobs.some(job => job.priority === 'visible' || job.priority === 'visible-batch') ? 'visible-batch' : jobs[0]?.priority ?? 'prefetch';
-        const request = this.tasks.request({ key: batch.key, serviceKey: `ai:${normalizeAiBaseUrl(this.ai.baseUrl)}:${this.ai.model}`, priority, signal: batch.controller.signal, quota: this.ai, estimatedTokens: Math.ceil((characters + this.ai.prompt.length + 400) * 1.5) }, signal => translateAiBatch(remaining, this.ai, signal, deliver));
+        const request = this.tasks.request({ key: batch.key, serviceKey: `ai:${normalizeAiBaseUrl(this.ai.baseUrl)}:${this.ai.model}`, priority, signal: batch.controller.signal, quota: this.ai, estimatedTokens: Math.ceil((characters + this.ai.prompt.length + 400) * 1.5) }, signal => translateAiBatch(remaining, this.ai, signal, preview));
         this.setForeground(this.foregroundKeys);
         try {
           const values = await request;
-          values.forEach((value, index) => deliver(index, value, true));
+          // The underlying request has now reached normal EOF with a valid SSE
+          // terminal event (or received a complete non-streaming response).
+          values.forEach((value, index) => {
+            const key = remaining[index]?.key;
+            for (const job of jobs) if (job.key === key && !job.cancelled && !job.delivered) {
+              job.delivered = true; job.resolve(value);
+            }
+          });
         } catch (error) {
           // Completed text is retained if another batch member fails.
           if (jobs.some(job => !job.cancelled && !job.delivered)) throw error;
