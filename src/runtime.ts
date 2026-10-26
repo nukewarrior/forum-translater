@@ -1,7 +1,5 @@
 import { redditContext } from './reddit-context';
 import { xParagraphs } from './x-paragraphs';
-import { XLongPosts } from './x-long-posts';
-import { isXPostBackground, isXPostBackgroundRoute, isXPostPath } from './x-post-modal';
 import { FeedDeduplicator } from './feed-deduplicator';
 import { TabTitle } from './tab-title';
 import { contentIdentity, discover, isReadable, OWNED, sourceSnapshot } from './reddit';
@@ -23,9 +21,12 @@ function matchTextStyle(target: HTMLElement, source: Element): void {
     if (value) target.style.setProperty(property, value);
   }
 }
+// Check X's native visibility state without changing routes or dialogs.
+function isInactiveXBackground(element: HTMLElement): boolean {
+  return isXSite() && !!element.closest('[aria-hidden="true"]');
+}
 export class RedditRuntime {
   private entries = new Map<HTMLElement, Entry>();
-  private longPosts = new XLongPosts();
   private detached = new Map<Entry, number>();
   private completedParagraphs = new Map<string, string>();
   private nearObserver: IntersectionObserver;
@@ -130,7 +131,7 @@ export class RedditRuntime {
     let first: Entry | undefined;
     for (const entry of this.entries.values()) {
       if (!entry.visible || entry.state !== 'idle' && entry.state !== 'loading'
-        || isXPostBackground(entry.element) || !isReadable(entry.element, false)) continue;
+        || isInactiveXBackground(entry.element) || !isReadable(entry.element, false)) continue;
       if (!first || first.element.compareDocumentPosition(entry.element) & Node.DOCUMENT_POSITION_PRECEDING) first = entry;
     }
     this.service.setForeground(first?.owner);
@@ -142,12 +143,9 @@ export class RedditRuntime {
   }
   private reconcile(): void {
     if (this.destroyed) return;
-    this.longPosts.reconcile();
     this.feed.reconcile();
     if (this.route !== location.href) {
       if (this.onProfileNavigation?.()) return;
-      const nativePostNavigation = isXSite() && document.documentElement.hasAttribute('data-ft-x-post-layout')
-        && (isXPostPath(new URL(this.route, location.href).pathname) || isXPostPath(location.pathname ?? ''));
       this.tabTitle.reset();
       this.route = location.href; this.translationOnly = loadTranslationOnly();
       // X may keep the feed tree while showing a Post. Do not tear down its
@@ -156,9 +154,8 @@ export class RedditRuntime {
         for (const entry of this.entries.values()) this.remove(entry);
         this.service.resetPending();
       }
-      // Native Post navigation retains the background. Mutation roots already
-      // identify new/changed content; route-only returns need no full rescan.
-      if (!nativePostNavigation) { this.roots.clear(); this.roots.add(document); }
+      // Discover content after SPA navigation without changing X's own routing.
+      this.roots.clear(); this.roots.add(document);
     }
     for (const entry of this.entries.values()) {
       if (entry.element.isConnected) { this.detached.delete(entry); continue; }
@@ -176,7 +173,7 @@ export class RedditRuntime {
       for (const candidate of discover(root)) {
         // Native Post modals aria-hide the live feed. Keep its translation DOM
         // and in-flight work instead of treating the background as collapsed content.
-        if (isXPostBackground(candidate.element)) continue;
+        if (isInactiveXBackground(candidate.element)) continue;
         const { kind } = candidate;
         if (!this.settings[kind]) continue;
         const known = this.entries.get(candidate.element);
@@ -185,7 +182,7 @@ export class RedditRuntime {
           if (known.state !== 'done') { if (isReadable(known.element)) this.start(known); else this.cancel(known); }
           continue;
         }
-        const element = this.longPosts.prepare(candidate.element);
+        const element = candidate.element;
         const snapshot = sourceSnapshot(element);
         const signature = snapshot.innerHTML;
         const identity = contentIdentity(element);
@@ -342,7 +339,7 @@ export class RedditRuntime {
       for (const separator of x?.separators ?? []) entry.originals.hideRange(separator);
     }
     const current = (): boolean => !controller.signal.aborted && !this.destroyed
-      && (this.route === location.href || isXPostBackground(entry.element) || isXPostBackgroundRoute(entry.element))
+      && (this.route === location.href || isXSite())
       && entry.element.isConnected && box.isConnected && contentIdentity(entry.element) === entry.identity
       && this.sourceMatches(entry);
     const running = new Set<number>();
@@ -440,6 +437,6 @@ export class RedditRuntime {
     document.removeEventListener('toggle', this.onCommentExpansion, true);
     document.removeEventListener('visibilitychange', this.onVisibility); window.removeEventListener('popstate', this.onRoute);
     for (const entry of this.entries.values()) { this.cancel(entry); entry.originals.restore(); for (const item of entry.inlineBoxes) item.remove(); entry.box?.remove(); }
-    this.entries.clear(); this.detached.clear(); this.longPosts.destroy(); this.completedParagraphs.clear(); this.roots.clear(); this.service.destroy();
+    this.entries.clear(); this.detached.clear(); this.completedParagraphs.clear(); this.roots.clear(); this.service.destroy();
   }
 }

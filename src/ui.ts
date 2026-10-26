@@ -104,12 +104,6 @@ export function mountControls(read: () => Settings, save: (settings: Settings) =
     }
     input('before', '向上预加载（像素）', 'number', String(current.before));
     input('after', '向下预加载（像素）', 'number', String(current.after));
-    if (isXSite()) {
-      input('xCollapseSidebar', 'X 左侧导航仅显示图标（悬停 X 标志可展开）', 'checkbox', current.xCollapseSidebar);
-      input('xHideRightSidebar', '隐藏 X 右栏（左右栏收起时正文占页宽 70%，居中）', 'checkbox', current.xHideRightSidebar);
-      input('xHideAds', '隐藏 X 信息流广告（取消勾选恢复）', 'checkbox', current.xHideAds);
-      input('xHideFloatingIcons', '隐藏 X 右下角 Grok / 聊天悬浮入口（取消勾选恢复）', 'checkbox', current.xHideFloatingIcons);
-    }
     disposeProfiles = mountProfileSection(api, () => { onProfileChanged?.(); profileMenu.refresh(); });
     const notice = document.createElement('p'); notice.textContent = '译文显示在原文下方，只翻译网站已加载且靠近视口的内容。AI 模型及请求数据发送至所选服务。'; cache.append(notice);
     const footer = document.createElement('footer'); panel.append(footer);
@@ -123,7 +117,6 @@ export function mountControls(read: () => Settings, save: (settings: Settings) =
       if (fontControls && !fontControls.valid()) { activate('fonts'); fontSection?.querySelector<HTMLInputElement>('input:invalid')?.reportValidity(); return; }
       next.fonts = fontControls?.read() ?? current.fonts;
       next.translationTheme = theme.value as TranslationTheme;
-      for (const name of ['xCollapseSidebar', 'xHideFloatingIcons', 'xHideRightSidebar', 'xHideAds'] as const) { const field = fields.get(name); if (field instanceof HTMLInputElement) next[name] = field.checked; }
       for (const name of ['enabled', 'title', 'body', 'comment', 'translationOnly'] as const) next[name] = (fields.get(name) as HTMLInputElement).checked;
       for (const name of ['before', 'after'] as const) next[name] = Number(fields.get(name)?.value);
       for (const field of fields.values()) {
