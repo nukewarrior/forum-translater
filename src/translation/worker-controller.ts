@@ -23,7 +23,7 @@ export function splitText(text: string, limit = 900): string[] {
 
 /** Page-scoped async workers; userscript transport and DOM rendering stay on the main thread. */
 export class TranslationWorkerController extends ScrollIdleQueue {
-  readonly tasks = new TranslationTaskManager({ maxConcurrent: 6, maxPrefetchConcurrent: 2, maxVocabularyConcurrent: 2 });
+  readonly tasks = new TranslationTaskManager({ maxConcurrent: 6, maxPrefetchConcurrent: 2 });
   readonly batcher: AiBatcher;
   constructor(ai: AiProfile) {
     super();
