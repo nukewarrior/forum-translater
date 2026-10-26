@@ -1,4 +1,4 @@
-import { withTranslationRetry } from './retry';
+import { retryableTranslationError, withTranslationRetry } from './retry';
 import { normalizeAiBaseUrl, type AiProfile } from '../settings';
 import { aiEntries, translateAiBatch, type AiSection } from './ai';
 import { TranslationTaskManager, type TranslationTaskPriority } from './translation-task-manager';
@@ -78,12 +78,14 @@ export class AiBatcher {
       const batch = { key: `ai-batch:${++this.sequence}`, controller: new AbortController(), jobs, attempt: 0 };
       for (const job of jobs) job.batch = batch;
       const unique = [...new Map(jobs.map(job => [job.key, job])).values()];
+      let hasVisibleOutput = false;
       void withTranslationRetry(async () => {
         batch.attempt++;
         const remaining = unique.filter(item => jobs.some(job => job.key === item.key && !job.cancelled && !job.delivered));
         if (!remaining.length) return;
         const preview = (index: number, text: string, _complete: boolean): void => {
           const key = remaining[index]?.key;
+          if (text.trim()) hasVisibleOutput = true;
           // Show validated text immediately, but do not resolve the paragraph:
           // a complete JSON section can precede a failed SSE or an HTTP abort.
           for (const job of jobs) if (job.key === key && !job.cancelled && !job.delivered && job.lastPreview !== text) {
@@ -106,7 +108,15 @@ export class AiBatcher {
             }
           });
         } catch (error) {
-          // Completed text is retained if another batch member fails.
+          // A provider may already have charged for streamed output. Never
+          // automatically replay the same batch after visible partial output.
+          // Explicit terminal errors (quota/permission) retain their original
+          // error type and message.
+          if (hasVisibleOutput && retryableTranslationError(error)) {
+            const failure = new Error('AI 已输出部分译文，但请求未正常结束；可能已产生费用，请手动重试');
+            failure.name = 'PartialTranslationError';
+            throw failure;
+          }
           if (jobs.some(job => !job.cancelled && !job.delivered)) throw error;
         }
       }, batch.controller.signal).catch((error: unknown) => {
