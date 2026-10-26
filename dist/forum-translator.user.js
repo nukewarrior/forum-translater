@@ -3995,6 +3995,7 @@
         profileMenu.refresh();
         if (previousFocus?.isConnected) previousFocus.focus();
       }
+      homeShortcut?.refresh();
     }
     dialog.addEventListener("cancel", (event) => {
       event.preventDefault();
@@ -4007,6 +4008,10 @@
       onProfileChanged?.();
       if (!panel.hidden) render();
     });
+    const homeShortcut = !isXSite() ? mountRedditHomeSettingsShortcut(
+      () => setOpen(true),
+      () => dialog.open
+    ) : void 0;
     const menu = GM_registerMenuCommand(`${isXSite() ? "X" : "Reddit"} 翻译设置`, () => setOpen(true));
     const metricsMenu = GM_registerMenuCommand("翻译性能统计（当前页面）", () => {
       alert(JSON.stringify(readTranslationMetrics(), null, 2));
@@ -4019,7 +4024,55 @@
       if (dialog.open) dialog.close();
       GM_unregisterMenuCommand(menu);
       GM_unregisterMenuCommand(metricsMenu);
+      homeShortcut?.destroy();
       host.remove();
+    };
+  }
+  function mountRedditHomeSettingsShortcut(openSettings, isDialogOpen) {
+    const host = document.createElement("div");
+    host.dataset.ftOwned = "reddit-home-settings";
+    const shadow = host.attachShadow({ mode: "open" });
+    const style = document.createElement("style");
+    style.textContent = [
+      ":host{all:initial}",
+      "button{position:fixed;right:20px;bottom:22px;z-index:2147483000;display:flex;align-items:center;gap:7px;",
+      "padding:10px 14px;border:1px solid #d9deea;border-radius:999px;background:#fff;color:#293751;",
+      "box-shadow:0 5px 20px #182b4930;font:600 12px/1.35 system-ui,-apple-system,sans-serif;cursor:pointer}",
+      "button:hover{background:#f0f2ff;border-color:#8e98d9}",
+      "button:focus-visible{outline:2px solid #4758d6;outline-offset:3px}",
+      "button[hidden]{display:none!important}",
+      "@media(max-width:680px){button{right:14px;bottom:16px;padding:9px 12px}}"
+    ].join("");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("aria-label", "打开 Reddit 翻译设置");
+    button.title = "论坛译读 · 翻译设置";
+    button.textContent = "译 · 翻译设置";
+    button.onclick = openSettings;
+    shadow.append(style, button);
+    document.body.append(host);
+    let previousRoute = "";
+    const update = () => {
+      previousRoute = location.href;
+      button.hidden = !/(^|\.)reddit\.com$/.test(location.hostname) || location.pathname !== "/" || isDialogOpen();
+    };
+    const observer = new MutationObserver(() => {
+      if (location.href !== previousRoute) update();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    window.addEventListener("popstate", update);
+    window.addEventListener("hashchange", update);
+    window.addEventListener("pageshow", update);
+    update();
+    return {
+      refresh: update,
+      destroy: () => {
+        observer.disconnect();
+        window.removeEventListener("popstate", update);
+        window.removeEventListener("hashchange", update);
+        window.removeEventListener("pageshow", update);
+        host.remove();
+      }
     };
   }
 
