@@ -10,7 +10,7 @@ import { translate } from '../src/translation/provider';
 import { retryableTranslationError } from '../src/translation/retry';
 import { TranslationCache, TranslationService } from '../src/translation/service';
 const ai = { ...DEFAULTS.ai, baseUrl: 'https://example.com/v1', apiKey: 'test-only-key', model: 'test-model' };
-const settings: Settings = { ...DEFAULTS, provider: 'ai', vocabulary: false, ai };
+const settings: Settings = { ...DEFAULTS, provider: 'ai', ai };
 const event = (payload: unknown): string => `data: ${JSON.stringify(payload)}\r\n\r\n`;
 const body = event({ type: 'response.output_text.delta', delta: '{"section_0":"你好 ⟦0⟧"}' }) + event({ type: 'response.completed' });
 let store: Map<string, unknown>;
@@ -158,9 +158,9 @@ it.each([
 });
 
 it.each([
-  { section_0: '已完成正文', section_1: '缺少保护标记', vocabulary: [] },
+  { section_0: '已完成正文', section_1: '缺少保护标记', extra_field: [] },
   { section_0: '已完成正文' },
-  { section_0: '已完成正文', section_1: '有效 ⟦0⟧', vocabulary: 'invalid' },
+  { section_0: '已完成正文', section_1: '有效 ⟦0⟧', extra_field: 'invalid' },
 ])('retains valid sections from a non-streaming response before rejecting its invalid remainder: %j', async output => {
   vi.stubGlobal('GM_xmlhttpRequest', (options: GmRequestOptions) => {
     queueMicrotask(() => options.onload?.({ status: 200, responseText: JSON.stringify({ output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(output) }] }] }) }));
