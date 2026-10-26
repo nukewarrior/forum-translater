@@ -14,7 +14,7 @@ import { isOwnedMutation } from './dom-mutations';
 interface Entry {
   element: HTMLElement; kind: Kind; box: HTMLDivElement | null; controller: AbortController | null;
   near: boolean; visible: boolean; state: 'idle' | 'loading' | 'done' | 'error';
-  signature: string; sourceSignature: string | null; identity: string; owner: string; completed: Map<number, string>; inlineBoxes: HTMLDivElement[]; originals: OriginalVisibility; learning: (() => void) | null;
+  signature: string; sourceSignature: string | null; identity: string; owner: string; completed: Map<number, string>; inlineBoxes: HTMLDivElement[]; originals: OriginalVisibility;
 }
 function matchTextStyle(target: HTMLElement, source: Element): void {
   const style = getComputedStyle(source);
@@ -137,7 +137,6 @@ export class RedditRuntime {
   }
   private remove(entry: Entry): void {
     this.detached.delete(entry);
-    entry.learning?.(); entry.learning = null;
     this.cancel(entry); entry.originals.restore(); for (const item of entry.inlineBoxes) item.remove(); entry.box?.remove(); this.nearObserver.unobserve(entry.element);
     this.visibleObserver.unobserve(entry.element); this.service.release(entry.owner); this.entries.delete(entry.element);
   }
@@ -152,7 +151,7 @@ export class RedditRuntime {
       this.tabTitle.reset();
       this.route = location.href; this.translationOnly = loadTranslationOnly();
       // X may keep the feed tree while showing a Post. Do not tear down its
-      // translations, vocabulary listeners, or task manager just because the URL changed.
+      // translations or task manager just because the URL changed.
       if (!isXSite()) {
         for (const entry of this.entries.values()) this.remove(entry);
         this.service.resetPending();
@@ -211,7 +210,7 @@ export class RedditRuntime {
         const visibleNow = !document.hidden && rect.width > 0 && rect.height > 0
           && rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth;
         const entry: Entry = { element, kind, box: null, controller: null, near: sameContent ? existing.near : false, visible: sameContent ? existing.visible : false,
-          state: 'idle', completed: new Map(), inlineBoxes: [], originals: new OriginalVisibility(), learning: null, signature, sourceSignature: signature, identity, owner: sameContent ? existing.owner : String(++this.sequence) };
+          state: 'idle', completed: new Map(), inlineBoxes: [], originals: new OriginalVisibility(), signature, sourceSignature: signature, identity, owner: sameContent ? existing.owner : String(++this.sequence) };
         if (visibleNow) { entry.visible = true; entry.near = true; }
         this.entries.set(element, entry); this.nearObserver.observe(element); this.visibleObserver.observe(element);
         if (entry.near || entry.visible) this.start(entry);
@@ -440,7 +439,7 @@ export class RedditRuntime {
     document.removeEventListener('click', this.onCommentExpansion, true);
     document.removeEventListener('toggle', this.onCommentExpansion, true);
     document.removeEventListener('visibilitychange', this.onVisibility); window.removeEventListener('popstate', this.onRoute);
-    for (const entry of this.entries.values()) { this.cancel(entry); entry.learning?.(); entry.originals.restore(); for (const item of entry.inlineBoxes) item.remove(); entry.box?.remove(); }
+    for (const entry of this.entries.values()) { this.cancel(entry); entry.originals.restore(); for (const item of entry.inlineBoxes) item.remove(); entry.box?.remove(); }
     this.entries.clear(); this.detached.clear(); this.longPosts.destroy(); this.completedParagraphs.clear(); this.roots.clear(); this.service.destroy();
   }
 }
