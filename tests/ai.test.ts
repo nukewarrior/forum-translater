@@ -74,6 +74,52 @@ it('accepts HTTP completion on stream transport even if reader has not yet signa
   expect(cancel).not.toHaveBeenCalled();
 });
 
+it('finishes a valid Responses terminal event without abort when stream onload and EOF never arrive', async () => {
+  vi.useFakeTimers();
+  let options: GmRequestOptions | undefined;
+  const abort = vi.fn();
+  vi.stubGlobal('GM_xmlhttpRequest', (request: GmRequestOptions) => {
+    options = request; return { abort };
+  });
+  const result = translateAi('Hello', ai, new AbortController().signal);
+  const resolved = vi.fn(); void result.then(resolved);
+  const body = event({ type: 'response.output_text.delta', delta: '{"section_0":"你好"}' })
+    + event({ type: 'response.completed' });
+  options?.onprogress?.({ status: 200, responseText: body });
+  await vi.advanceTimersByTimeAsync(1499);
+  expect(resolved).not.toHaveBeenCalled();
+  expect(abort).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  await expect(result).resolves.toBe('你好');
+  expect(abort).not.toHaveBeenCalled();
+  // A hanging ReadableStream or missing onload must not be treated as a
+  // client-side cancellation. The network is allowed to finish on its own.
+  await vi.advanceTimersByTimeAsync(60000);
+  expect(abort).not.toHaveBeenCalled();
+});
+
+it('refreshes the 60-second idle guard while streamed translation keeps growing', async () => {
+  vi.useFakeTimers();
+  let options: GmRequestOptions | undefined;
+  const abort = vi.fn();
+  vi.stubGlobal('GM_xmlhttpRequest', (value: GmRequestOptions) => { options = value; return { abort }; });
+  const result = translateAi('Hello', ai, new AbortController().signal);
+  let responseText = '';
+  await vi.advanceTimersByTimeAsync(59000);
+  responseText += event({ type: 'response.output_text.delta', delta: '{"section_0":"你' });
+  options?.onprogress?.({ status: 200, responseText });
+  await vi.advanceTimersByTimeAsync(59000);
+  responseText += event({ type: 'response.output_text.delta', delta: '好"}' });
+  options?.onprogress?.({ status: 200, responseText });
+  await vi.advanceTimersByTimeAsync(59000);
+  expect(abort).not.toHaveBeenCalled();
+  responseText += event({ type: 'response.completed' });
+  options?.onprogress?.({ status: 200, responseText });
+  await vi.advanceTimersByTimeAsync(1500);
+  await expect(result).resolves.toBe('你好');
+  expect(abort).not.toHaveBeenCalled();
+});
+
 it.each(['response.failed', 'response.incomplete', 'error'])('rejects %s immediately even if the server leaves the stream open', async type => {
   const abort = vi.fn();
   vi.stubGlobal('GM_xmlhttpRequest', (options: GmRequestOptions) => {
