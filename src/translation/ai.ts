@@ -384,10 +384,8 @@ export function translateAiBatch(sections: readonly AiSection[], ai: AiProfile, 
         if (settled || response.status !== 200 || !/^\s*(?:event:|data:|:)/.test(response.responseText)) return;
         try {
           const raw = stream.push(response.responseText);
-          if (stream.done) {
-            const values = decodeValues(raw);
-            metric.finish(true); finish(() => resolve(values)); handle?.abort(); return;
-          }
+          // SSE completion marks the provider's terminal event, not HTTP EOF.
+          // Continue draining the stream so trailing usage and the normal close arrive.
           if (entries.some((_entry, index) => !published.get(index)?.complete)) {
             const partials = streamedJsonRecord(raw);
             entries.forEach((entry, index) => {
@@ -398,13 +396,9 @@ export function translateAiBatch(sections: readonly AiSection[], ai: AiProfile, 
               publishTranslation(index, partial, complete);
             });
           }
-          // Incomplete JSON is normal while streaming; do not throw/parse it per token.
-          const ending = raw.trimEnd();
-          if (!ending.endsWith('}') && !ending.endsWith('```')) return;
-          let values: string[];
-          try { values = decodeValues(raw); } catch { return; }
-          stream.push(response.responseText, true);
-          metric.finish(true); finish(() => resolve(values)); handle?.abort();
+          // A syntactically complete translation is safe to preview, but not to
+          // cache or resolve until the transport ends successfully. In particular,
+          // do not abort the request or cancel its reader on the success path.
         } catch (error) {
           preserveCompletedTranslations(stream.content);
           finish(() => reject(error instanceof Error && !(error instanceof SyntaxError) ? error : new Error('AI 流式 JSON 无法解析'))); handle?.abort();
