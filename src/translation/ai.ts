@@ -364,7 +364,7 @@ export function translateAiBatch(sections: readonly AiSection[], ai: AiProfile, 
     const resetIdleTimeout = (): void => {
       clearTimeout(watchdog);
       watchdog = setTimeout(() => {
-        finish(() => reject(new Error('AI 连续 60 秒没有产生新译文，已终止请求')));
+        finish(() => reject(new Error('AI 翻译超过 60 秒没有产生新内容，已终止请求')));
         handle?.abort();
       }, 60000);
     };
