@@ -22,14 +22,15 @@ export function fontFamilyCss(family: string): string {
 const headings = ':is([data-testid="twitterArticleRichTextView"],[data-testid="longformRichTextComponent"]) :is(h1,h2,h3,h4,h5,h6)';
 const excluded = 'pre,code,kbd,samp,button,input,textarea,select,svg,[contenteditable]:not([contenteditable="false"]),[data-ft-owned]:not([data-ft-owned="translation"])';
 export function fontTargets(scope: keyof FontSettings): string {
-  const source = scope === 'title' ? `${contentSelector('title')},${headings}` : `${contentSelector('body')},${contentSelector('comment')}`;
+  // On X, native text keeps the host typography; only translations use custom fonts.
+  const native = /(^|\.)(x|twitter)\.com$/.test(location.hostname);
+  const source = native ? '' : scope === 'title' ? `${contentSelector('title')},${headings}` : `${contentSelector('body')},${contentSelector('comment')}`;
   const translation = scope === 'title' ? '[data-ft-owned="translation"].ft-translation-title,[data-ft-owned="translation"][data-ft-font="title"]' : '[data-ft-owned="translation"]:not(.ft-translation-title):not([data-ft-font="title"])';
-  return `:is(${source},${translation}):not(:is(${excluded},:is(${excluded}) *))`;
+  return `:is(${[source, translation].filter(Boolean).join(',')}):not(:is(${excluded},:is(${excluded}) *))`;
 }
 export function fontStyles(raw: FontSettings): string {
   const settings = normalizeFonts(raw); const rules: string[] = [];
-  // Important declarations in this layer override the host and our fixed tweet
-  // sizes, including inline style copies, without modifying the source nodes.
+  // Apply typography to inserted translations; Reddit retains opt-in source typography.
   for (const scope of ['body', 'title'] as const) {
     const target = fontTargets(scope); const choice = settings[scope];
     if (choice.family) rules.push(`:where(${target},${target} *):not(:where(${excluded},:is(${excluded}) *)){font-family:${fontFamilyCss(choice.family)}!important}`);

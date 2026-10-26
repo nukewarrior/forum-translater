@@ -6,12 +6,11 @@ export type TranslationTheme = keyof typeof TRANSLATION_THEMES;
 export interface AiProfile { baseUrl: string; apiKey: string; model: string; prompt: string; requestsPerMinute: number; tokensPerMinute: number; reasoningEffort?: 'none' | 'low' | 'auto'; fastMode?: boolean; protocol?: 'responses' | 'chat-completions' }
 export interface Settings {
   fonts: FontSettings;
-  xCollapseSidebar: boolean; xHideFloatingIcons: boolean; xHideRightSidebar: boolean; xHideAds: boolean;
   translationOnly: boolean; enabled: boolean; title: boolean; body: boolean; comment: boolean;
   before: number; after: number; provider: 'google' | 'microsoft' | 'ai'; ai: AiProfile; translationTheme: TranslationTheme;
   profileId?: string; profileRevision?: number;
 }
-export const DEFAULTS: Settings = { fonts: DEFAULT_FONTS, xHideAds: true, xCollapseSidebar: true, xHideFloatingIcons: true, xHideRightSidebar: true, translationTheme: 'quote', translationOnly: false, enabled: true, title: true, body: true, comment: true, before: 600, after: 1200, provider: 'google', ai: { baseUrl: '', apiKey: '', model: '', prompt: '', requestsPerMinute: 30, tokensPerMinute: 0, reasoningEffort: 'low', fastMode: false, protocol: 'responses' } };
+export const DEFAULTS: Settings = { fonts: DEFAULT_FONTS, translationTheme: 'quote', translationOnly: false, enabled: true, title: true, body: true, comment: true, before: 600, after: 1200, provider: 'google', ai: { baseUrl: '', apiKey: '', model: '', prompt: '', requestsPerMinute: 30, tokensPerMinute: 0, reasoningEffort: 'low', fastMode: false, protocol: 'responses' } };
 export function normalizeSettings(raw: Partial<Settings>): Settings {
   const value = { ...DEFAULTS, fonts: normalizeFonts(raw.fonts), ai: { ...DEFAULTS.ai } };
   value.ai.reasoningEffort = raw.ai?.reasoningEffort === 'none' ? 'none' : raw.ai?.reasoningEffort === 'auto' ? 'auto' : 'low';
@@ -22,7 +21,7 @@ export function normalizeSettings(raw: Partial<Settings>): Settings {
     const number = raw.ai?.[key];
     if (typeof number === 'number' && Number.isFinite(number)) value.ai[key] = Math.max(key === 'requestsPerMinute' ? 1 : 0, Math.min(1000000, Math.round(number)));
   }
-  for (const key of ['enabled', 'title', 'body', 'comment', 'translationOnly', 'xCollapseSidebar', 'xHideFloatingIcons', 'xHideRightSidebar', 'xHideAds'] as const) if (typeof raw[key] === 'boolean') value[key] = raw[key];
+  for (const key of ['enabled', 'title', 'body', 'comment', 'translationOnly'] as const) if (typeof raw[key] === 'boolean') value[key] = raw[key];
   for (const key of ['before', 'after'] as const) {
     const number = raw[key];
     if (typeof number === 'number' && Number.isFinite(number)) value[key] = Math.min(5000, Math.max(0, Math.round(number)));

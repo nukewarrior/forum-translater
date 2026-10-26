@@ -2,7 +2,7 @@
 
 > Reddit 与 X/Twitter 的逐段中文翻译脚本。支持 Google、Microsoft 和多个自定义 AI Profile，兼容 OpenAI Responses API 与 Chat Completions API。
 
-**版本：0.3.2（开发分支）** · MIT License · 基于 [sunbigfly/forum-translater](https://github.com/sunbigfly/forum-translater) 定制
+**版本：0.3.3（原生 X 布局）** · MIT License · 基于 [sunbigfly/forum-translater](https://github.com/sunbigfly/forum-translater) 定制
 
 ## 安装
 
@@ -47,7 +47,7 @@
 - 译文在原文下方显示；提供多种样式、仅显示译文、分类翻译开关。
 - 视口内容优先、批量 AI 调度、预加载、并发限制、缓存和失败重试。
 - 保留字体设置、本机字体检索与预览；字体与显示设置不跟随 Profile 切换。
-- 保留 X 侧栏/右栏与广告控制、图片视频等比缩放、弹窗详情及返回位置处理。
+- X 保留原生导航、右栏、搜索、广告、帖子详情、展开控件与媒体布局；只添加译文和必要的翻译控制。
 - 保留 Reddit 的媒体缩放和页面布局优化。
 - 保留当前页面的翻译性能统计。
 
@@ -56,7 +56,7 @@
 ## 升级、存储与隐私
 
 - 首次升级至多 Profile 版本时，**旧翻译服务配置不会迁移**；默认使用 Google 翻译。请准备好重新输入 AI 地址、模型和 API Key。
-- 字体、译文显示和 Reddit/X 布局等非翻译设置继续保留。
+- 字体与译文显示设置继续保留；旧 X 布局偏好不再生效，不影响翻译 Profile 与缓存。
 - 旧单词本、词汇分析缓存与关联详情数据会在首次初始化时自动清理，不提供恢复功能。
 - 每个 Profile 有独立 ID 和配置版本号，译文缓存按 Profile 隔离。重命名不使缓存失效，修改关键翻译参数会使旧缓存无法命中。
 - 配置及密钥仅保存在当前 Tampermonkey 环境中，无跨设备同步、导入导出或云端备份。

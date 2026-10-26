@@ -91,34 +91,6 @@ it('discovers Reddit comments appended during continuous scrolling rather than w
   expect(node.textContent).toContain('滚动中完成');
 });
 
-it.each([330, 1280])('returns from native Posts at %i px without cloning the retained feed or rescanning the document', async width => {
-  const route = { hostname: 'x.com', href: 'https://x.com/home', pathname: '/home' };
-  vi.stubGlobal('location', route); vi.stubGlobal('innerWidth', width);
-  document.body.innerHTML = '<main data-testid="primaryColumn" data-ft-x-post-background="/home"><article data-testid="tweet"><a href="/user/status/123"><time>Now</time></a><div data-testid="tweetText">Retained feed paragraph</div></article></main>';
-  const feed = document.querySelector('main'); const root = feed?.querySelector('[data-testid="tweetText"]');
-  if (!feed || !root) throw new Error('Missing feed');
-  const translate = vi.spyOn(service, 'section').mockResolvedValue('已有译文');
-  runtime = new RedditRuntime({ ...service.settings }, service); Observer.instances[0]?.emit(root); await settle();
-  const box = feed.querySelector('[data-ft-owned="translation"]'); const discovery = vi.spyOn(reddit, 'discover'); const snapshots = vi.spyOn(reddit, 'sourceSnapshot');
-  document.documentElement.setAttribute('data-ft-x-post-layout', '');
-  try {
-    route.href = 'https://x.com/user/status/456'; route.pathname = '/user/status/456'; feed.setAttribute('aria-hidden', 'true');
-    const post = document.createElement('div'); post.setAttribute('role', 'dialog'); post.setAttribute('data-ft-x-native-post', '');
-    post.innerHTML = '<main data-testid="primaryColumn"><article data-testid="tweet"><a href="/user/status/456"><time>Now</time></a><div data-testid="tweetText">New Post paragraph</div></article></main>';
-    document.body.append(post); window.dispatchEvent(new PopStateEvent('popstate')); await settle();
-    const opened = post.querySelector('[data-testid="tweetText"]'); if (!opened) throw new Error('Missing Post');
-    Observer.instances[0]?.emit(opened); await settle();
-    route.href = 'https://x.com/home'; route.pathname = '/home'; post.remove(); feed.removeAttribute('aria-hidden');
-    window.dispatchEvent(new PopStateEvent('popstate')); await settle();
-    expect(discovery.mock.calls.some(([scope]) => scope === document)).toBe(false);
-    expect(snapshots.mock.calls.filter(([source]) => source === root)).toHaveLength(0);
-    expect(feed.querySelector('[data-ft-owned="translation"]')).toBe(box); expect(translate).toHaveBeenCalledTimes(2);
-    const reads = vi.spyOn(HTMLElement.prototype, 'getClientRects'); reads.mockClear();
-    Observer.instances[0]?.emit(root); Observer.instances[1]?.emit(root);
-    expect(reads).not.toHaveBeenCalled();
-  } finally { document.documentElement.removeAttribute('data-ft-x-post-layout'); }
-});
-
 it('reuses the source snapshot and section nodes while streaming, then rejects changed host content', async () => {
   let partial: ((value: string) => void) | undefined; let finish: ((value: string) => void) | undefined;
   const translate = vi.spyOn(service, 'section').mockResolvedValue('新译文').mockImplementationOnce((_text, _owner, _priority, _signal, onPartial) => {
@@ -588,30 +560,23 @@ it('accepts a background translation finishing immediately after Esc changes the
   expect(box?.textContent).toContain('原请求完成'); expect(translate).toHaveBeenCalledOnce();
 });
 
-it('translates the complete preview sentence before expansion and defers all remaining sentences until Show more', async () => {
-  document.body.innerHTML = '<article data-testid="tweet"><a href="/user/status/123"><time>Now</time></a><div><div data-testid="tweetText">First paragraph\n\nWe are</div><button data-testid="tweet-text-show-more-link">Show more</button></div></article>';
-  const article = document.querySelector('article'); if (!article) throw new Error('Missing tweet');
-  Object.assign(article, { __reactFiber$test: { memoizedProps: { tweet: { id_str: '123', note_tweet: { text: 'First paragraph\n\nWe are completing the preview sentence. This sentence stays hidden.\n\nMore hidden content.' } } } } });
-  const translate = vi.spyOn(service, 'section').mockResolvedValue('完整译文');
+it('preserves X native Show more controls and translates content after expansion', async () => {
+  document.body.innerHTML = '<article data-testid="tweet"><a href="/user/status/123"><time>Now</time></a><div><div data-testid="tweetText">First paragraph</div><button data-testid="tweet-text-show-more-link">Show more</button></div></article>';
+  const source = document.querySelector<HTMLElement>('[data-testid="tweetText"]');
+  const button = document.querySelector<HTMLButtonElement>('[data-testid="tweet-text-show-more-link"]');
+  if (!source || !button) throw new Error('Missing native tweet');
+  button.addEventListener('click', () => { source.textContent = 'First paragraph. More original text.'; });
+  const translate = vi.spyOn(service, 'section').mockResolvedValue('译文');
   runtime = new RedditRuntime({ ...service.settings }, service);
-  const body = document.querySelector('[data-ft-long-post] [data-testid="tweetText"]'); if (!body) throw new Error('Missing complete body');
-  Observer.instances[0]?.emit(body); await settle();
-  expect(translate.mock.calls.map(call => call[0])).toEqual(['First paragraph', 'We are completing the preview sentence.']);
-  expect(translate.mock.calls.every(call => !call[5]?.post?.includes('hidden'))).toBe(true);
-  const button = document.querySelector<HTMLButtonElement>('[data-ft-owned="long-post-toggle"]');
-  expect(button?.getAttribute('aria-expanded')).toBe('false'); expect(body.querySelectorAll('[data-ft-owned="translation"]')).toHaveLength(2);
-  const previewBoxes = [...body.querySelectorAll('[data-ft-owned="translation"]')];
-  expect(document.querySelector('[data-ft-long-remainder] [data-testid="tweetText"]')).toBeNull();
-  button?.click(); await settle();
-  const tail = document.querySelector('[data-ft-long-remainder] [data-testid="tweetText"]'); if (!tail) throw new Error('Missing expanded source');
-  Observer.instances[0]?.emit(tail); await settle();
-  expect(translate.mock.calls.map(call => call[0])).toEqual(['First paragraph', 'We are completing the preview sentence.', 'This sentence stays hidden.', 'More hidden content.']);
-  const tailBoxes = [...tail.querySelectorAll('[data-ft-owned="translation"]')]; expect(tailBoxes).toHaveLength(2);
-  button?.click(); await settle(); button?.click(); await settle();
-  expect(translate).toHaveBeenCalledTimes(4);
-  previewBoxes.forEach(box => expect(body.contains(box)).toBe(true)); tailBoxes.forEach(box => expect(tail.contains(box)).toBe(true));
+  Observer.instances[0]?.emit(source); await settle();
+  expect(button.isConnected).toBe(true);
+  expect(document.querySelector('[data-ft-long-post]')).toBeNull();
+  button.click(); await settle();
+  Observer.instances[0]?.emit(source); await settle();
+  expect(source.textContent).toContain('More original text.');
+  expect(translate.mock.calls.some(([text]) => String(text).includes('More original text.'))).toBe(true);
+  expect(document.querySelector('[data-ft-long-source]')).toBeNull();
 });
-
 it('translates dynamically identified Article title and blocks inline without changing source media', async () => {
   document.body.innerHTML = `<main><h1 id="article-title">Memory guide</h1>
     <div id="article-body"><div data-block="true">First paragraph</div><h2>Introduction</h2>
