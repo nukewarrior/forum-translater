@@ -1294,27 +1294,31 @@
       this.onContent?.(content);
     }
     #consumeEvent(event) {
-      for (const line of event.split(/\r?\n/)) {
-        if (!line.startsWith("data:")) continue;
-        const data2 = line.slice(5).trim();
-        if (!data2) continue;
-        if (data2 === "[DONE]") {
-          this.#done = true;
-          continue;
-        }
-        const payload = JSON.parse(data2);
-        if (payload.response?.usage) this.onUsage?.(payload.response.usage);
-        if (payload.type === "response.output_text.delta" && typeof payload.delta === "string") {
-          this.#publish(this.#content + payload.delta);
-        } else if (payload.type === "response.output_text.done" && typeof payload.text === "string") {
-          this.#publish(payload.text);
-        } else if (payload.type === "response.completed" && payload.response && !this.#content) {
-          this.#publish(decodeResponseOutput(payload.response));
-        } else if (payload.type === "response.failed" || payload.type === "response.incomplete" || payload.type === "error") {
-          this.#failure = responseFailure(payload.response?.error ?? payload.error ?? payload, "AI 响应失败");
-        }
-        if (payload.type === "response.completed" || payload.type === "response.failed") this.#done = true;
+      const lines = event.split(/\r?\n/);
+      const eventName = lines.find((line) => line.startsWith("event:"))?.slice(6).trim();
+      const data2 = lines.filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n");
+      if (!data2) return;
+      if (data2 === "[DONE]") {
+        this.#done = true;
+        return;
       }
+      const payload = JSON.parse(data2);
+      const type = typeof payload.type === "string" ? payload.type : eventName;
+      if (payload.response?.usage) this.onUsage?.(payload.response.usage);
+      if (type === "response.output_text.delta" && typeof payload.delta === "string") {
+        this.#publish(this.#content + payload.delta);
+      } else if (type === "response.output_text.done" && typeof payload.text === "string") {
+        this.#publish(payload.text);
+      } else if (type === "response.completed") {
+        if (payload.response?.status === "failed" || payload.response?.status === "incomplete" || payload.response?.error) {
+          this.#failure = responseFailure(payload.response.error, "AI 响应未完成");
+        } else if (payload.response && !this.#content) {
+          this.#publish(decodeResponseOutput(payload.response));
+        }
+      } else if (type === "response.failed" || type === "response.incomplete" || type === "error") {
+        this.#failure = responseFailure(payload.response?.error ?? payload.error ?? payload, "AI 响应失败");
+      }
+      if (type === "response.completed" || type === "response.failed" || type === "response.incomplete") this.#done = true;
     }
   };
   function decodeChatCompletion(body) {
@@ -1377,6 +1381,7 @@
         if (payload.usage) this.onUsage?.(payload.usage);
         for (const choice of payload.choices ?? []) {
           if (choice.finish_reason === "length") this.#failure = new Error("AI 输出超过长度限制，译文不完整");
+          if (choice.finish_reason === "stop") this.#done = true;
           const content = choice.delta?.content;
           if (typeof content === "string" && content) {
             this.#content += content;
