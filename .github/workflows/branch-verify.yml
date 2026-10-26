@@ -1,7 +1,7 @@
 name: Branch Verification
 on:
   push:
-    branches: [feat/multi-profile-openai-compatible]
+    branches: [main, feat/multi-profile-openai-compatible]
   workflow_dispatch:
 jobs:
   verify:
