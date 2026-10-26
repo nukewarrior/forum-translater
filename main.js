@@ -3,7 +3,7 @@
 // @name:en      Forum Translator
 // @description:en Translate Reddit and X with multiple translation profiles, OpenAI-compatible APIs, and adjustable typography.
 // @namespace    sunbigfly/forum-translater
-// @version      0.3.0
+// @version      0.3.1
 // @description  支持 Reddit 与 X 多翻译 Profile、流式 AI 翻译及 X 图片视频等比缩放。
 // @homepageURL  https://github.com/nukewarrior/forum-translater
 // @supportURL   https://github.com/nukewarrior/forum-translater/issues
@@ -2049,7 +2049,8 @@
             });
           } catch (error) {
             if (hasVisibleOutput && retryableTranslationError(error)) {
-              const failure = new Error("AI 已输出部分译文，但请求未正常结束；可能已产生费用，请手动重试");
+              const reason = error instanceof Error ? error.message : "连接中断";
+              const failure = new Error(`AI 已输出部分译文，但请求未正常结束（${reason}）；可能已产生费用，请手动重试`);
               failure.name = "PartialTranslationError";
               throw failure;
             }
@@ -3095,7 +3096,7 @@
           this.service.worker.render(entry.owner, render);
         } catch (error) {
           if (!current()) return;
-          let message = error instanceof Error ? `${error.name}: ${error.message}` : "未知错误";
+          let message = error instanceof Error ? error.name === "PartialTranslationError" ? error.message : `${error.name}: ${error.message}` : "未知错误";
           if (this.settings.ai.apiKey) message = message.replaceAll(this.settings.ai.apiKey, "[已隐藏]");
           failureReasons.set(index, message.replace(/https?:\/\/\S+/g, "[服务地址]").slice(0, 180));
           streaming.delete(index);
