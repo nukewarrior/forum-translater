@@ -353,12 +353,22 @@ export function translateAiBatch(sections: readonly AiSection[], ai: AiProfile, 
     const stream = ai.protocol === 'chat-completions'
       ? new ChatCompletionStreamDecoder(() => metric.milestone('first-output-delta'), usage => metric.usage(usage))
       : new ResponseStreamDecoder(() => metric.milestone('first-output-delta'), usage => metric.usage(usage));
+    let terminalTimer: ReturnType<typeof setTimeout> | undefined;
+    let watchdog: ReturnType<typeof setTimeout>;
     const finish = (action: () => void): void => {
       if (settled) return;
-      settled = true; clearTimeout(watchdog); signal.removeEventListener('abort', abort); action(); metric.finish(false);
+      settled = true; clearTimeout(watchdog); clearTimeout(terminalTimer);
+      signal.removeEventListener('abort', abort); action(); metric.finish(false);
     };
     const abort = (): void => { finish(() => reject(new DOMException('已取消', 'AbortError'))); handle?.abort(); };
-    const watchdog = setTimeout(() => { finish(() => reject(new Error('AI 翻译超过 60 秒，请重试或切换模型'))); handle?.abort(); }, 60000);
+    const resetIdleTimeout = (): void => {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => {
+        finish(() => reject(new Error('AI 连续 60 秒没有产生新译文，已终止请求')));
+        handle?.abort();
+      }, 60000);
+    };
+    resetIdleTimeout();
     let streamStarted = false;
     let streamFinished = false;
     let streamedResponseText = '';
@@ -385,7 +395,7 @@ export function translateAiBatch(sections: readonly AiSection[], ai: AiProfile, 
     };
     const options: GmRequestOptions = {
       responseType: nonStream ? 'text' : 'stream', onloadstart: response => { metric.milestone('headers'); if (!nonStream) void consumeStream(response); },
-      method: 'POST', url: aiEndpoint(ai), anonymous: true, timeout: 60000,
+      method: 'POST', url: aiEndpoint(ai), anonymous: true, timeout: 300000,
       headers: { ...(ai.apiKey.trim() ? { Authorization: `Bearer ${ai.apiKey.trim()}` } : {}), 'Content-Type': 'application/json', Accept: 'text/event-stream, application/json' },
       data: JSON.stringify(aiRequestBody(ai, sections, !nonStream)),
       onprogress: response => {
@@ -395,9 +405,23 @@ export function translateAiBatch(sections: readonly AiSection[], ai: AiProfile, 
         }
         if (settled || response.status !== 200 || !/^\s*(?:event:|data:|:)/.test(response.responseText)) return;
         try {
+          const before = stream.content.length;
           const raw = stream.push(response.responseText);
-          // SSE completion marks the provider's terminal event, not HTTP EOF.
-          // Continue draining the stream so trailing usage and the normal close arrive.
+          if (stream.content.length > before) resetIdleTimeout();
+          // A valid provider terminal event is authoritative for content
+          // completion. Prefer natural HTTP onload/EOF, but Tampermonkey stream
+          // readers may never signal their last read on some proxy chains.
+          // After a short grace period, resolve WITHOUT aborting the transport.
+          // The reader continues draining until the remote side closes.
+          if (stream.done && terminalTimer === undefined) {
+            const values = decodeValues(raw);
+            clearTimeout(watchdog);
+            terminalTimer = setTimeout(() => {
+              if (settled) return;
+              metric.finish(true);
+              finish(() => resolve(values));
+            }, 1500);
+          }
           if (entries.some((_entry, index) => !published.get(index)?.complete)) {
             const partials = streamedJsonRecord(raw);
             entries.forEach((entry, index) => {
