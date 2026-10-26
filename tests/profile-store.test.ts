@@ -19,6 +19,8 @@ it('initializes exactly one Google profile without importing legacy AI settings'
   store.set('ft:wordbook:v1', [{ word: 'unused' }]);
   store.set('ft:vocabulary:v1', [['old', 'cache']]);
   store.set('ft:wordbook-detail:v1:wiktionary:test', { old: true });
+  store.set('ft:settings:v1', { provider: 'ai', ai: { baseUrl: 'https://old.example/v1', apiKey: 'old', model: 'old-model' }, vocabulary: true,
+    fonts: { heading: 'Legacy Font' }, translationTheme: 'paper', xHideAds: false, before: 300 });
   store.set('ft:display-site:reddit.com/*', true);
   const state = listProfiles();
   expect(state.profiles).toHaveLength(1);
@@ -28,6 +30,9 @@ it('initializes exactly one Google profile without importing legacy AI settings'
   expect(store.has('ft:vocabulary:v1')).toBe(false);
   expect(store.has('ft:wordbook-detail:v1:wiktionary:test')).toBe(false);
   expect(store.get('ft:display-site:reddit.com/*')).toBe(true);
+  expect(store.get('ft:settings:v1')).toEqual({
+    fonts: { heading: 'Legacy Font' }, translationTheme: 'paper', xHideAds: false, before: 300,
+  });
   expect(listProfiles().activeId).toBe(state.activeId);
 });
 it('stores API Keys independently, copies without credentials, and tracks only translation-impacting revisions', () => {
