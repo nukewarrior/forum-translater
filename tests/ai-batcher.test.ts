@@ -4,7 +4,7 @@ import { TranslationTaskManager } from '../src/translation/translation-task-mana
 import { DEFAULTS } from '../src/settings';
 import { translateAiBatch } from '../src/translation/ai';
 vi.mock('../src/translation/ai', async importOriginal => ({ ...await importOriginal<typeof import('../src/translation/ai')>(), translateAiBatch: vi.fn() }));
-afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); });
+afterEach(() => { vi.useRealTimers(); vi.resetAllMocks(); });
 it('launches text before queued vocabulary after batching, while both remain concurrent', async () => {
   vi.useFakeTimers();
   const tasks = new TranslationTaskManager({ maxConcurrent: 2 });
