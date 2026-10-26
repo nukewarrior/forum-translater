@@ -3,8 +3,8 @@
 // @name:en      Forum Translator
 // @description:en Translate Reddit and X with multiple translation profiles, OpenAI-compatible APIs, and adjustable typography.
 // @namespace    sunbigfly/forum-translater
-// @version      0.3.2
-// @description  支持 Reddit 与 X 多翻译 Profile、流式 AI 翻译及 X 图片视频等比缩放。
+// @version      0.3.3
+// @description  支持 Reddit 与 X 多翻译 Profile、流式 AI 翻译，保持 X 原生布局。
 // @homepageURL  https://github.com/nukewarrior/forum-translater
 // @supportURL   https://github.com/nukewarrior/forum-translater/issues
 // @updateURL    https://raw.githubusercontent.com/nukewarrior/forum-translater/main/dist/forum-translator.user.js
@@ -167,9 +167,10 @@
   var headings = ':is([data-testid="twitterArticleRichTextView"],[data-testid="longformRichTextComponent"]) :is(h1,h2,h3,h4,h5,h6)';
   var excluded = 'pre,code,kbd,samp,button,input,textarea,select,svg,[contenteditable]:not([contenteditable="false"]),[data-ft-owned]:not([data-ft-owned="translation"])';
   function fontTargets(scope) {
-    const source = scope === "title" ? `${contentSelector("title")},${headings}` : `${contentSelector("body")},${contentSelector("comment")}`;
+    const native = /(^|\.)(x|twitter)\.com$/.test(location.hostname);
+    const source = native ? "" : scope === "title" ? `${contentSelector("title")},${headings}` : `${contentSelector("body")},${contentSelector("comment")}`;
     const translation = scope === "title" ? '[data-ft-owned="translation"].ft-translation-title,[data-ft-owned="translation"][data-ft-font="title"]' : '[data-ft-owned="translation"]:not(.ft-translation-title):not([data-ft-font="title"])';
-    return `:is(${source},${translation}):not(:is(${excluded},:is(${excluded}) *))`;
+    return `:is(${[source, translation].filter(Boolean).join(",")}):not(:is(${excluded},:is(${excluded}) *))`;
   }
   function fontStyles(raw) {
     const settings = normalizeFonts(raw);
@@ -349,7 +350,7 @@
 
   // src/settings.ts
   var TRANSLATION_THEMES = { quote: "淡灰引用", plain: "自然正文", weakening: "弱化译文", "dividing-line": "分隔线", underline: "下划线", highlight: "柔和高亮", paper: "纸张卡片" };
-  var DEFAULTS = { fonts: DEFAULT_FONTS, xHideAds: true, xCollapseSidebar: true, xHideFloatingIcons: true, xHideRightSidebar: true, translationTheme: "quote", translationOnly: false, enabled: true, title: true, body: true, comment: true, before: 600, after: 1200, provider: "google", ai: { baseUrl: "", apiKey: "", model: "", prompt: "", requestsPerMinute: 30, tokensPerMinute: 0, reasoningEffort: "low", fastMode: false, protocol: "responses" } };
+  var DEFAULTS = { fonts: DEFAULT_FONTS, translationTheme: "quote", translationOnly: false, enabled: true, title: true, body: true, comment: true, before: 600, after: 1200, provider: "google", ai: { baseUrl: "", apiKey: "", model: "", prompt: "", requestsPerMinute: 30, tokensPerMinute: 0, reasoningEffort: "low", fastMode: false, protocol: "responses" } };
   function normalizeSettings(raw) {
     const value = { ...DEFAULTS, fonts: normalizeFonts(raw.fonts), ai: { ...DEFAULTS.ai } };
     value.ai.reasoningEffort = raw.ai?.reasoningEffort === "none" ? "none" : raw.ai?.reasoningEffort === "auto" ? "auto" : "low";
@@ -360,7 +361,7 @@
       const number = raw.ai?.[key];
       if (typeof number === "number" && Number.isFinite(number)) value.ai[key] = Math.max(key === "requestsPerMinute" ? 1 : 0, Math.min(1e6, Math.round(number)));
     }
-    for (const key of ["enabled", "title", "body", "comment", "translationOnly", "xCollapseSidebar", "xHideFloatingIcons", "xHideRightSidebar", "xHideAds"]) if (typeof raw[key] === "boolean") value[key] = raw[key];
+    for (const key of ["enabled", "title", "body", "comment", "translationOnly"]) if (typeof raw[key] === "boolean") value[key] = raw[key];
     for (const key of ["before", "after"]) {
       const number = raw[key];
       if (typeof number === "number" && Number.isFinite(number)) value[key] = Math.min(5e3, Math.max(0, Math.round(number)));
@@ -500,243 +501,6 @@
     });
     return { snapshot, ranges, separators };
   }
-
-  // src/x-long-posts.ts
-  var object = (value) => value !== null && typeof value === "object" ? value : void 0;
-  function tweetData(root, id) {
-    const article = root.closest('article[data-testid="tweet"]');
-    for (let node = root; node && article?.contains(node); node = node.parentElement) {
-      const key = Object.keys(node).find((name) => name.startsWith("__reactFiber$"));
-      let fiber = object(key ? node[key] : void 0);
-      for (let depth = 0; fiber && depth < 30; depth++, fiber = object(fiber.return)) {
-        const tweet = object(object(fiber.memoizedProps)?.tweet);
-        if (tweet && (tweet.id_str === id || tweet.rest_id === id)) return tweet;
-      }
-    }
-  }
-  function fullPostText(root) {
-    const id = contentIdentity(root).replace(/^x:status:/, "");
-    if (!/^\d+$/.test(id)) return;
-    const tweet = tweetData(root, id);
-    const note = object(tweet?.note_tweet);
-    const result = object(object(note?.note_tweet_results)?.result);
-    const text = note?.text ?? result?.text;
-    if (typeof text !== "string" || !text.trim()) return;
-    return text;
-  }
-  function previewText(source, fullText) {
-    const snapshot = sourceSnapshot(source);
-    for (const br of snapshot.querySelectorAll("br")) br.replaceWith("\n");
-    const prefix = (snapshot.textContent ?? "").replace(/\r\n?/g, "\n").trim().replace(/(?:…|\.{3})$/, "").trimEnd();
-    if (!prefix || !fullText.startsWith(prefix)) return;
-    for (const segment of new Intl.Segmenter(void 0, { granularity: "sentence" }).segment(fullText)) {
-      const end = segment.index + segment.segment.trimEnd().length;
-      if (end < prefix.length) continue;
-      const lineEnd = fullText.indexOf("\n", prefix.length);
-      return fullText.slice(0, lineEnd < 0 ? end : Math.min(end, lineEnd)).trimEnd();
-    }
-  }
-  var XLongPosts = class {
-    posts = /* @__PURE__ */ new Map();
-    prepare(source) {
-      if (!source.matches('[data-testid="tweetText"]') || source.closest("[data-ft-long-post]")) return source;
-      const existing = this.posts.get(source);
-      const signature = sourceSnapshot(source).innerHTML;
-      const identity = contentIdentity(source);
-      if (existing) {
-        if (signature === existing.signature && identity === existing.identity && existing.wrapper.isConnected) return existing.body;
-        this.remove(existing);
-      }
-      const article = source.closest('article[data-testid="tweet"]');
-      if (article?.querySelector('[data-testid="tweetText"]') !== source) return source;
-      const more = source.parentElement?.querySelector(':scope > [data-testid="tweet-text-show-more-link"]');
-      if (!more) return source;
-      const text = fullPostText(source)?.replace(/\r\n?/g, "\n").trim();
-      if (!text) return source;
-      const preview = previewText(source, text);
-      if (!preview) return source;
-      const remaining = text.slice(preview.length).trimStart();
-      const wrapper = document.createElement("div");
-      wrapper.dataset.ftLongPost = "";
-      const viewport = document.createElement("div");
-      viewport.className = "ft-long-post-viewport";
-      const body = document.createElement("div");
-      body.dataset.testid = "tweetText";
-      body.lang = source.lang;
-      body.textContent = preview;
-      const remainder = document.createElement("div");
-      remainder.dataset.ftLongRemainder = "";
-      remainder.hidden = true;
-      const button = document.createElement("button");
-      button.type = "button";
-      button.dataset.ftOwned = "long-post-toggle";
-      button.textContent = "Show more";
-      button.setAttribute("aria-expanded", "false");
-      button.hidden = !remaining;
-      button.onclick = (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const expanded = wrapper.toggleAttribute("data-expanded");
-        if (expanded && !remainder.childNodes.length) {
-          const tail = document.createElement("div");
-          tail.dataset.testid = "tweetText";
-          tail.lang = source.lang;
-          tail.textContent = remaining;
-          remainder.append(tail);
-        }
-        remainder.hidden = !expanded;
-        button.setAttribute("aria-expanded", String(expanded));
-        button.textContent = expanded ? "Show less" : "Show more";
-      };
-      const ellipsis = document.createElement("div");
-      ellipsis.dataset.ftOwned = "long-post-ellipsis";
-      ellipsis.textContent = "…";
-      ellipsis.setAttribute("aria-hidden", "true");
-      ellipsis.hidden = !remaining;
-      viewport.append(body, remainder);
-      wrapper.append(viewport, ellipsis, button);
-      source.after(wrapper);
-      source.setAttribute("data-ft-long-source", "");
-      more.setAttribute("data-ft-long-more", "");
-      this.posts.set(source, { source, body, wrapper, more, signature, identity });
-      return body;
-    }
-    reconcile() {
-      for (const post of this.posts.values()) {
-        if (post.source.isConnected !== post.wrapper.isConnected || post.source.parentElement !== post.wrapper.parentElement) this.remove(post);
-      }
-      const detached = [...this.posts.values()].filter((post) => !post.source.isConnected);
-      for (const post of detached.slice(0, Math.max(0, detached.length - 50))) this.remove(post);
-    }
-    remove(post) {
-      post.source.removeAttribute("data-ft-long-source");
-      post.more.removeAttribute("data-ft-long-more");
-      post.wrapper.remove();
-      this.posts.delete(post.source);
-    }
-    destroy() {
-      for (const post of this.posts.values()) this.remove(post);
-    }
-  };
-
-  // src/x-post-modal.ts
-  var data = (value) => value !== null && (typeof value === "object" || typeof value === "function") ? value : void 0;
-  var isXPostPath = (path) => /^\/(?:[^/]+\/status|i\/web\/status|i\/thread)\/\d+\/?$/.test(path);
-  var isPost = () => isXPostPath(location.pathname ?? "");
-  var marker = "data-ft-x-native-post";
-  var backgroundMarker = "data-ft-x-post-background";
-  function isXPostBackground(element) {
-    const background = element.closest(`[${backgroundMarker}]`);
-    return element.isConnected && !!background && (isPost() && background.getAttribute(backgroundMarker) !== location.pathname || !!background.closest('[aria-hidden="true"]'));
-  }
-  function isXPostBackgroundRoute(element) {
-    return element.isConnected && element.closest(`[${backgroundMarker}]`)?.getAttribute(backgroundMarker) === location.pathname;
-  }
-  function containingArray(items, route2, depth = 0) {
-    if (items.includes(route2)) return items;
-    if (depth >= 8) return;
-    for (const item of items) {
-      if (!Array.isArray(item)) continue;
-      const found = containingArray(item, route2, depth + 1);
-      if (found) return found;
-    }
-  }
-  var XPostModal = class {
-    patches = [];
-    root;
-    surface;
-    reconcile() {
-      const root = [...document.querySelectorAll('[data-testid="primaryColumn"]')].find((node) => !node.closest('[role="dialog"]'));
-      if (root && root !== this.root) {
-        for (const patch of this.patches) {
-          const extra = patch.extra;
-          if (!extra || patch.route.type !== patch.installedType || patch.route.props !== patch.installed) continue;
-          patch.route.type = extra.route.type;
-          patch.installedType = extra.route.type;
-          patch.route.props = extra.modalProps;
-          patch.installed = extra.modalProps;
-          const index = extra.parent.indexOf(extra.route);
-          if (index >= 0) extra.parent.splice(index, 1);
-          delete patch.extra;
-        }
-        this.install(root);
-      }
-      const surface = isPost() && this.patches.length ? [...document.querySelectorAll('[role="dialog"] [data-testid="primaryColumn"]')].find((node) => node.querySelector('[data-testid="app-bar-back"]'))?.closest('[role="dialog"]') ?? void 0 : void 0;
-      if (surface !== this.surface) {
-        this.surface?.removeAttribute(marker);
-        this.surface = surface;
-        surface?.setAttribute(marker, "");
-      }
-    }
-    install(root) {
-      const property = Object.keys(root).find((name) => name.startsWith("__reactFiber$"));
-      let fiber = data(property ? Reflect.get(root, property) : void 0);
-      for (let depth = 0; fiber && depth < 100; depth++, fiber = data(fiber.return)) {
-        const children = data(fiber.memoizedProps)?.children;
-        if (!Array.isArray(children)) continue;
-        const routes = children.flat(8).map(data).filter((route2) => !!route2);
-        const modalType = routes.find((route2) => {
-          const defaults = data(data(route2.type)?.defaultProps);
-          return defaults?.restoreBackgroundFromPreviousPath === true && typeof defaults.shouldRenderAsModal === "function";
-        })?.type;
-        if (!modalType) continue;
-        const posts = routes.filter((route2) => {
-          const props = data(route2.props);
-          return typeof route2.key === "string" && /permalink[123]$/.test(route2.key) && props?.exact === true && typeof props.path === "string" && /\/(?:status|thread)\/:statusId/.test(props.path) && !!props.component;
-        });
-        if (!posts.length) continue;
-        for (const route2 of posts) {
-          if (this.patches.some((patch2) => patch2.route === route2) || route2.type === modalType) continue;
-          if (!Object.getOwnPropertyDescriptor(route2, "type")?.writable || !Object.getOwnPropertyDescriptor(route2, "props")?.writable) continue;
-          const props = data(route2.props);
-          const installed = { ...props, modalSize: "full", withBackground: true, disableAnimation: true, shouldAlwaysDisplayModal: () => true };
-          const patch = { route: route2, type: route2.type, props: route2.props, installedType: modalType, installed };
-          const path = String(props?.path);
-          const alias = path.startsWith("/i/web/status/") ? "/i/web/status/" : path.startsWith("/i/thread/") ? "/i/thread/" : void 0;
-          const initialPost = !this.root && isPost() && (alias ? location.pathname.startsWith(alias) : !/^\/i\/(web\/status|thread)\//.test(location.pathname));
-          if (initialPost) {
-            const parent = containingArray(children, route2);
-            if (!parent || Object.isFrozen(parent) || Object.isSealed(parent)) continue;
-            const id = /\/(\d+)\/?$/.exec(location.pathname)?.[1];
-            if (!id) continue;
-            const extra = { ...route2, key: `${String(route2.key)}:ft-modal`, type: modalType, props: installed };
-            patch.installedType = route2.type;
-            patch.installed = { ...props, path: path.replace(/:statusId(?:\([^)]*\))?/, `:statusId(${id})`) };
-            patch.extra = { parent, route: extra, modalProps: installed };
-            parent.splice(parent.indexOf(route2) + 1, 0, extra);
-          }
-          route2.type = patch.installedType;
-          route2.props = patch.installed;
-          this.patches.push(patch);
-        }
-        if (this.patches.length) {
-          document.documentElement.setAttribute("data-ft-x-post-layout", "");
-          this.root?.removeAttribute(backgroundMarker);
-          this.root = root;
-          root.setAttribute(backgroundMarker, location.pathname);
-        }
-        return;
-      }
-    }
-    destroy() {
-      document.documentElement.removeAttribute("data-ft-x-post-layout");
-      this.surface?.removeAttribute(marker);
-      this.surface = void 0;
-      this.root?.removeAttribute(backgroundMarker);
-      this.root = void 0;
-      for (const patch of this.patches) {
-        if (patch.extra) {
-          const index = patch.extra.parent.indexOf(patch.extra.route);
-          if (index >= 0) patch.extra.parent.splice(index, 1);
-        }
-        if (patch.route.type === patch.installedType && patch.route.props === patch.installed) {
-          patch.route.type = patch.type;
-          patch.route.props = patch.props;
-        }
-      }
-      this.patches = [];
-    }
-  };
 
   // src/feed-deduplicator.ts
   var MARKER = "data-ft-duplicate";
@@ -1303,13 +1067,13 @@
     #consumeEvent(event) {
       const lines = event.split(/\r?\n/);
       const eventName = lines.find((line) => line.startsWith("event:"))?.slice(6).trim();
-      const data2 = lines.filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n");
-      if (!data2) return;
-      if (data2 === "[DONE]") {
+      const data = lines.filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n");
+      if (!data) return;
+      if (data === "[DONE]") {
         this.#done = true;
         return;
       }
-      const payload = JSON.parse(data2);
+      const payload = JSON.parse(data);
       const type = typeof payload.type === "string" ? payload.type : eventName;
       if (payload.response?.usage) this.onUsage?.(payload.response.usage);
       if (type === "response.output_text.delta" && typeof payload.delta === "string") {
@@ -1374,13 +1138,13 @@
     #consumeEvent(event) {
       for (const line of event.split(/\r?\n/)) {
         if (!line.startsWith("data:")) continue;
-        const data2 = line.slice(5).trim();
-        if (!data2) continue;
-        if (data2 === "[DONE]") {
+        const data = line.slice(5).trim();
+        if (!data) continue;
+        if (data === "[DONE]") {
           this.#done = true;
           continue;
         }
-        const payload = JSON.parse(data2);
+        const payload = JSON.parse(data);
         if (payload.error) {
           this.#failure = new Error(payload.error.code === "usage_limit_reached" ? "当前模型额度已用尽（usage_limit_reached）" : payload.error.message ?? "AI 响应失败");
           continue;
@@ -2151,12 +1915,12 @@
     } else if (settings.provider === "google") {
       const url = new URL("https://translate.googleapis.com/translate_a/t");
       for (const [key, val] of Object.entries({ client: "dict-chrome-ex", sl: "auto", tl: "zh-CN", q: source })) url.searchParams.set(key, val);
-      const data2 = await requestJson(url.href, signal);
-      value = Array.isArray(data2) ? Array.isArray(data2[0]) ? data2[0][0] : data2[0] : void 0;
+      const data = await requestJson(url.href, signal);
+      value = Array.isArray(data) ? Array.isArray(data[0]) ? data[0][0] : data[0] : void 0;
     } else if (settings.provider === "microsoft") {
       const token = await microsoftToken(signal);
-      const data2 = await requestJson("https://api-edge.cognitive.microsofttranslator.com/translate?api-version=3.0&to=zh-Hans", signal, [{ Text: source }], token);
-      const translations = record(Array.isArray(data2) ? data2[0] : void 0).translations;
+      const data = await requestJson("https://api-edge.cognitive.microsofttranslator.com/translate?api-version=3.0&to=zh-Hans", signal, [{ Text: source }], token);
+      const translations = record(Array.isArray(data) ? data[0] : void 0).translations;
       value = record(Array.isArray(translations) ? translations[0] : void 0).text;
     }
     return validateTranslation(source, value);
@@ -2602,6 +2366,9 @@
       if (value) target.style.setProperty(property, value);
     }
   }
+  function isInactiveXBackground(element) {
+    return isXSite() && !!element.closest('[aria-hidden="true"]');
+  }
   var RedditRuntime = class {
     constructor(settings, service, onProfileNavigation) {
       this.settings = settings;
@@ -2644,7 +2411,6 @@
       this.reconcile();
     }
     entries = /* @__PURE__ */ new Map();
-    longPosts = new XLongPosts();
     detached = /* @__PURE__ */ new Map();
     completedParagraphs = /* @__PURE__ */ new Map();
     nearObserver;
@@ -2716,7 +2482,7 @@
     updateForeground() {
       let first;
       for (const entry of this.entries.values()) {
-        if (!entry.visible || entry.state !== "idle" && entry.state !== "loading" || isXPostBackground(entry.element) || !isReadable(entry.element, false)) continue;
+        if (!entry.visible || entry.state !== "idle" && entry.state !== "loading" || isInactiveXBackground(entry.element) || !isReadable(entry.element, false)) continue;
         if (!first || first.element.compareDocumentPosition(entry.element) & Node.DOCUMENT_POSITION_PRECEDING) first = entry;
       }
       this.service.setForeground(first?.owner);
@@ -2734,11 +2500,9 @@
     }
     reconcile() {
       if (this.destroyed) return;
-      this.longPosts.reconcile();
       this.feed.reconcile();
       if (this.route !== location.href) {
         if (this.onProfileNavigation?.()) return;
-        const nativePostNavigation = isXSite() && document.documentElement.hasAttribute("data-ft-x-post-layout") && (isXPostPath(new URL(this.route, location.href).pathname) || isXPostPath(location.pathname ?? ""));
         this.tabTitle.reset();
         this.route = location.href;
         this.translationOnly = loadTranslationOnly();
@@ -2746,10 +2510,8 @@
           for (const entry of this.entries.values()) this.remove(entry);
           this.service.resetPending();
         }
-        if (!nativePostNavigation) {
-          this.roots.clear();
-          this.roots.add(document);
-        }
+        this.roots.clear();
+        this.roots.add(document);
       }
       for (const entry of this.entries.values()) {
         if (entry.element.isConnected) {
@@ -2770,7 +2532,7 @@
       for (const root of this.roots) {
         if (root instanceof Element && !root.isConnected) continue;
         for (const candidate of discover(root)) {
-          if (isXPostBackground(candidate.element)) continue;
+          if (isInactiveXBackground(candidate.element)) continue;
           const { kind } = candidate;
           if (!this.settings[kind]) continue;
           const known = this.entries.get(candidate.element);
@@ -2781,7 +2543,7 @@
             }
             continue;
           }
-          const element = this.longPosts.prepare(candidate.element);
+          const element = candidate.element;
           const snapshot = sourceSnapshot(element);
           const signature = snapshot.innerHTML;
           const identity = contentIdentity(element);
@@ -2976,7 +2738,7 @@
         }
         for (const separator of x?.separators ?? []) entry.originals.hideRange(separator);
       }
-      const current = () => !controller.signal.aborted && !this.destroyed && (this.route === location.href || isXPostBackground(entry.element) || isXPostBackgroundRoute(entry.element)) && entry.element.isConnected && box.isConnected && contentIdentity(entry.element) === entry.identity && this.sourceMatches(entry);
+      const current = () => !controller.signal.aborted && !this.destroyed && (this.route === location.href || isXSite()) && entry.element.isConnected && box.isConnected && contentIdentity(entry.element) === entry.identity && this.sourceMatches(entry);
       const running = /* @__PURE__ */ new Set();
       const render = () => {
         if (!current()) return;
@@ -3143,7 +2905,6 @@
       }
       this.entries.clear();
       this.detached.clear();
-      this.longPosts.destroy();
       this.completedParagraphs.clear();
       this.roots.clear();
       this.service.destroy();
@@ -3940,12 +3701,6 @@
       }
       input("before", "向上预加载（像素）", "number", String(current.before));
       input("after", "向下预加载（像素）", "number", String(current.after));
-      if (isXSite()) {
-        input("xCollapseSidebar", "X 左侧导航仅显示图标（悬停 X 标志可展开）", "checkbox", current.xCollapseSidebar);
-        input("xHideRightSidebar", "隐藏 X 右栏（左右栏收起时正文占页宽 70%，居中）", "checkbox", current.xHideRightSidebar);
-        input("xHideAds", "隐藏 X 信息流广告（取消勾选恢复）", "checkbox", current.xHideAds);
-        input("xHideFloatingIcons", "隐藏 X 右下角 Grok / 聊天悬浮入口（取消勾选恢复）", "checkbox", current.xHideFloatingIcons);
-      }
       disposeProfiles = mountProfileSection(api, () => {
         onProfileChanged?.();
         profileMenu.refresh();
@@ -3989,10 +3744,6 @@
         }
         next.fonts = fontControls?.read() ?? current.fonts;
         next.translationTheme = theme.value;
-        for (const name of ["xCollapseSidebar", "xHideFloatingIcons", "xHideRightSidebar", "xHideAds"]) {
-          const field = fields.get(name);
-          if (field instanceof HTMLInputElement) next[name] = field.checked;
-        }
         for (const name of ["enabled", "title", "body", "comment", "translationOnly"]) next[name] = fields.get(name).checked;
         for (const name of ["before", "after"]) next[name] = Number(fields.get(name)?.value);
         for (const field of fields.values()) {
@@ -4107,228 +3858,6 @@
       }
     };
   }
-
-  // src/x-post-viewport.ts
-  var route = () => `${location.pathname}${location.search ?? ""}`;
-  function postId(article) {
-    const timestamp = article.querySelector('a[href*="/status/"]:has(time)');
-    const link = timestamp ?? article.querySelector('a[href*="/status/"]');
-    return /\/status\/(\d+)/.exec(link?.getAttribute("href") ?? "")?.[1];
-  }
-  var XPostViewport = class {
-    snapshots = [];
-    timer;
-    restoreFrame;
-    restoreObserver;
-    pendingRestore;
-    focusTimer;
-    currentRoute = route();
-    returningRoute;
-    constructor() {
-      document.addEventListener("click", this.capture, true);
-      window.addEventListener("wheel", this.cancel, { capture: true, passive: true });
-      window.addEventListener("touchstart", this.cancel, { capture: true, passive: true });
-      window.addEventListener("pointerdown", this.cancel, { capture: true, passive: true });
-      window.addEventListener("keydown", this.onKey, true);
-      window.addEventListener("resize", this.cancel);
-    }
-    capture = (event) => {
-      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.defaultPrevented) return;
-      const target = event.target instanceof Element ? event.target : null;
-      if (isXPostPath(location.pathname) && target?.closest('[data-testid="app-bar-back"]')) {
-        this.restore();
-        return;
-      }
-      const article = target?.closest('article[data-testid="tweet"]');
-      if (!article || target?.closest('[data-ft-owned],button,[role="button"],input,textarea,video')) return;
-      const link = target?.closest("a");
-      if (link && !isXPostPath(link.getAttribute("href") ?? "")) return;
-      this.cancel();
-      const anchor = postId(article);
-      const rect = article.getBoundingClientRect();
-      if (!anchor || rect.height <= 0 || rect.bottom <= 0 || rect.top >= innerHeight) return;
-      const currentRoute = route();
-      const existing = this.snapshots.findIndex((snapshot) => snapshot.route === currentRoute);
-      if (existing >= 0) this.snapshots.splice(existing);
-      this.snapshots.push({ route: currentRoute, width: innerWidth, anchor, top: rect.top, container: article.closest("[data-ft-x-native-post]") });
-      if (this.snapshots.length > 20) this.snapshots.shift();
-    };
-    reconcile() {
-      const currentRoute = route();
-      this.restoreReady();
-      if (currentRoute === this.currentRoute) return;
-      this.currentRoute = currentRoute;
-      clearTimeout(this.focusTimer);
-      this.focusTimer = void 0;
-      const snapshotIndex = this.snapshots.findIndex((snapshot) => snapshot.route === currentRoute);
-      const returning = this.returningRoute === currentRoute || snapshotIndex >= 0;
-      if (snapshotIndex >= 0 && !this.pendingRestore) {
-        const [snapshot] = this.snapshots.splice(snapshotIndex);
-        if (snapshot && snapshot.width === innerWidth) this.beginRestore(snapshot);
-      }
-      this.returningRoute = void 0;
-      if (returning || !isXPostPath(location.pathname)) return;
-      const id = /\/(\d+)\/?$/.exec(location.pathname)?.[1];
-      const deadline = Date.now() + 5e3;
-      const focus = (settled = false) => {
-        this.focusTimer = void 0;
-        if (route() !== currentRoute || Date.now() >= deadline) return;
-        const surface = document.querySelector("[data-ft-x-native-post]");
-        const primary = surface?.querySelector('[data-testid="primaryColumn"]');
-        const anchor = [...primary?.querySelectorAll('article[data-testid="tweet"]') ?? []].find((node) => postId(node) === id);
-        if (!surface || !primary || !anchor || surface.getBoundingClientRect().height <= 0 || anchor.getBoundingClientRect().height <= 0) {
-          this.focusTimer = setTimeout(() => focus(), 100);
-          return;
-        }
-        if (!settled) {
-          this.focusTimer = setTimeout(() => focus(true), 200);
-          return;
-        }
-        let top = surface.getBoundingClientRect().top;
-        for (let node = primary.querySelector('[data-testid="app-bar-back"]'); node && node !== primary; node = node.parentElement) {
-          if (["sticky", "fixed"].includes(getComputedStyle(node).position)) top = Math.max(top, node.getBoundingClientRect().bottom);
-        }
-        const delta = anchor.getBoundingClientRect().top - (top + 12);
-        if (Math.abs(delta) > 1) surface.scrollTo({ top: Math.max(0, surface.scrollTop + delta), left: surface.scrollLeft, behavior: "instant" });
-      };
-      this.focusTimer = setTimeout(() => focus(), 0);
-    }
-    restore() {
-      if (this.pendingRestore) return;
-      const snapshot = this.snapshots.at(-1);
-      if (!snapshot || snapshot.route === route() || snapshot.width !== innerWidth) return;
-      this.snapshots.pop();
-      this.beginRestore(snapshot);
-    }
-    beginRestore(snapshot) {
-      this.cancel();
-      this.returningRoute = snapshot.route;
-      this.pendingRestore = { snapshot, origin: route(), applied: false, microtaskChecked: false };
-      this.restoreObserver = new MutationObserver(() => this.restoreReady());
-      this.restoreObserver.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-hidden", "hidden", "style", "data-ft-x-native-post"] });
-      this.timer = setTimeout(this.cancel, 2e3);
-      this.restoreReady();
-      if (this.pendingRestore && this.restoreFrame === void 0) {
-        this.restoreFrame = requestAnimationFrame(() => {
-          this.restoreFrame = void 0;
-          this.restoreReady();
-        });
-      }
-    }
-    restoreReady() {
-      const pending = this.pendingRestore;
-      if (!pending) return;
-      if (innerWidth !== pending.snapshot.width || route() !== pending.origin && route() !== pending.snapshot.route) {
-        this.cancel();
-        return;
-      }
-      if (pending.applied || route() !== pending.snapshot.route || !this.correctOffset(pending.snapshot)) return;
-      pending.applied = true;
-      if (this.restoreFrame !== void 0) cancelAnimationFrame(this.restoreFrame);
-      this.restoreFrame = void 0;
-      if (pending.microtaskChecked) {
-        this.finishRestore(pending);
-        return;
-      }
-      pending.microtaskChecked = true;
-      queueMicrotask(() => {
-        if (this.pendingRestore !== pending) return;
-        if (route() !== pending.snapshot.route || innerWidth !== pending.snapshot.width) {
-          this.cancel();
-          return;
-        }
-        if (!this.correctOffset(pending.snapshot)) {
-          pending.applied = false;
-          this.restoreFrame = requestAnimationFrame(() => {
-            this.restoreFrame = void 0;
-            this.restoreReady();
-          });
-          return;
-        }
-        this.finishRestore(pending);
-      });
-    }
-    finishRestore(pending) {
-      this.restoreObserver?.disconnect();
-      this.restoreFrame = requestAnimationFrame(() => {
-        this.restoreFrame = void 0;
-        if (this.pendingRestore !== pending) return;
-        if (route() === pending.snapshot.route && innerWidth === pending.snapshot.width) this.correctOffset(pending.snapshot);
-        this.cancel();
-      });
-    }
-    correctOffset(snapshot) {
-      const anchor = [...(snapshot.container?.isConnected ? snapshot.container : document).querySelectorAll('[data-testid="primaryColumn"] article[data-testid="tweet"]')].find((node) => postId(node) === snapshot.anchor && !node.closest('[aria-hidden="true"],[hidden]'));
-      if (!anchor) return false;
-      const rect = anchor.getBoundingClientRect();
-      if (rect.height <= 0) return false;
-      const delta = rect.top - snapshot.top;
-      if (Math.abs(delta) > 1) {
-        const container = anchor.closest("[data-ft-x-native-post]");
-        if (container) container.scrollTo({ top: Math.max(0, container.scrollTop + delta), left: container.scrollLeft, behavior: "instant" });
-        else window.scrollTo({ top: Math.max(0, scrollY + delta), left: scrollX, behavior: "instant" });
-        const corrected = anchor.getBoundingClientRect();
-        return corrected.height > 0 && Math.abs(corrected.top - snapshot.top) <= 1;
-      }
-      return true;
-    }
-    cancel = () => {
-      clearTimeout(this.timer);
-      this.timer = void 0;
-      if (this.restoreFrame !== void 0) cancelAnimationFrame(this.restoreFrame);
-      this.restoreFrame = void 0;
-      this.restoreObserver?.disconnect();
-      this.restoreObserver = void 0;
-      this.pendingRestore = void 0;
-      clearTimeout(this.focusTimer);
-      this.focusTimer = void 0;
-    };
-    onKey = (event) => {
-      if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) this.cancel();
-    };
-    destroy() {
-      this.cancel();
-      this.snapshots = [];
-      document.removeEventListener("click", this.capture, true);
-      window.removeEventListener("wheel", this.cancel, true);
-      window.removeEventListener("touchstart", this.cancel, true);
-      window.removeEventListener("pointerdown", this.cancel, true);
-      window.removeEventListener("keydown", this.onKey, true);
-      window.removeEventListener("resize", this.cancel);
-    }
-  };
-
-  // src/x-ads.ts
-  function isXAd(article) {
-    const candidates = article.querySelectorAll('[data-testid="promotedIndicator"],span');
-    for (const marker2 of candidates) {
-      if (marker2.closest("article") !== article || marker2.closest('[data-testid="tweetText"],[data-testid="User-Name"],[data-ft-owned],a,time')) continue;
-      if (marker2.matches('[data-testid="promotedIndicator"]')) return true;
-      if (!/^(广告|廣告|推广|推廣|Ad|Promoted|Sponsored)$/i.test(marker2.textContent?.trim() ?? "")) continue;
-      for (let header = marker2.parentElement; header && header !== article; header = header.parentElement) {
-        if (header.querySelector('[data-testid="tweetText"]')) break;
-        if (header.querySelector('[data-testid="User-Name"]') && header.querySelector('[data-testid="caret"]')) return true;
-      }
-    }
-    return false;
-  }
-  var XAds = class {
-    hidden = /* @__PURE__ */ new Set();
-    reconcile(enabled) {
-      const next = /* @__PURE__ */ new Set();
-      if (enabled) for (const article of document.querySelectorAll('[data-testid="primaryColumn"] article[data-testid="tweet"]')) {
-        if (article.parentElement?.closest("article") || !isXAd(article)) continue;
-        next.add(article.closest('[data-testid="cellInnerDiv"]') ?? article);
-      }
-      for (const node of this.hidden) if (!next.has(node)) node.removeAttribute("data-ft-x-ad");
-      for (const node of next) node.setAttribute("data-ft-x-ad", "");
-      this.hidden = next;
-    }
-    destroy() {
-      for (const node of this.hidden) node.removeAttribute("data-ft-x-ad");
-      this.hidden.clear();
-    }
-  };
 
   // src/x-video-resize.ts
   var DEFAULT_WIDTH = 420;
@@ -4551,336 +4080,6 @@
     }
   };
 
-  // src/x-layout.ts
-  var launchers = '[data-testid="GrokDrawer"],[data-testid="DMDrawer"],button[aria-label*="Grok"],[role="button"][aria-label*="Grok"],a[href="/i/grok"],[aria-label="Chat"],[aria-label="聊天"],[aria-label="Messages"],[aria-label="私信"]';
-  var XLayout = class {
-    constructor(settings, save) {
-      this.settings = settings;
-      this.save = save;
-      if (!isXSite()) return;
-      this.work = new ScrollIdleQueue();
-      this.viewport = new XPostViewport();
-      this.videos = new XVideoResize();
-      this.images = new XVideoResize("image");
-      const toggle = document.createElement("button");
-      toggle.type = "button";
-      toggle.dataset.ftOwned = "x-sidebar-toggle";
-      const svg = (path, viewBox) => {
-        const node = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-        node.setAttribute("viewBox", viewBox);
-        node.setAttribute("aria-hidden", "true");
-        const shape = document.createElementNS(node.namespaceURI, "path");
-        shape.setAttribute("d", path);
-        node.append(shape);
-        return node;
-      };
-      const brand = svg("M18.9 2H22l-6.8 7.8L23.2 22h-6.3L12 14.6 5.5 22H2.3l7.9-9L1 2h6.5l4.9 6.8L18.9 2ZM17.8 20h1.7L6.5 3.9H4.7L17.8 20Z", "0 0 24 24");
-      brand.classList.add("ft-x-brand");
-      const home = document.createElement("div");
-      home.dataset.ftOwned = "x-sidebar-brand";
-      home.append(toggle);
-      this.brand = home;
-      const hint = document.createElement("span");
-      hint.setAttribute("aria-hidden", "true");
-      const state = svg("M6 4.5h12A2.5 2.5 0 0 1 20.5 7v10a2.5 2.5 0 0 1-2.5 2.5H6A2.5 2.5 0 0 1 3.5 17V7A2.5 2.5 0 0 1 6 4.5ZM9 4.5v15M13.5 9l3 3-3 3", "0 0 24 24");
-      state.classList.add("ft-x-state");
-      hint.append(state);
-      toggle.append(brand, hint);
-      toggle.onclick = () => {
-        const collapsed = !this.settings.xCollapseSidebar;
-        this.update({ ...this.settings, xCollapseSidebar: collapsed });
-        this.save(collapsed);
-      };
-      this.toggle = toggle;
-      this.observer = new MutationObserver((records) => {
-        if (records.every(isOwnedMutation)) return;
-        this.work?.render("posts", () => {
-          this.posts.reconcile();
-          this.viewport?.reconcile();
-        }, 150);
-        this.work?.render("videos", () => this.videos?.reconcile(), 150);
-        this.work?.render("images", () => this.images?.reconcile(), 150);
-        this.work?.render("navigation", () => this.scanNavigation(), 150);
-        this.work?.render("ads", () => this.ads.reconcile(this.settings.xHideAds), 150);
-      });
-      this.observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-label", "data-testid"] });
-      document.addEventListener("keydown", this.exitPost, true);
-      window.addEventListener("popstate", this.onRoute);
-      this.update(settings);
-    }
-    viewport;
-    posts = new XPostModal();
-    observer;
-    work;
-    hidden = /* @__PURE__ */ new Set();
-    ads = new XAds();
-    toggle;
-    brand;
-    logo;
-    rail;
-    labels = /* @__PURE__ */ new Set();
-    videos;
-    images;
-    update(settings) {
-      this.settings = settings;
-      if (!this.toggle) return;
-      document.documentElement.toggleAttribute("data-ft-x-sidebar-collapsed", settings.xCollapseSidebar);
-      document.documentElement.toggleAttribute("data-ft-x-right-hidden", settings.xHideRightSidebar);
-      document.documentElement.toggleAttribute("data-ft-x-hide-icons", settings.xHideFloatingIcons);
-      this.toggle.title = settings.xCollapseSidebar ? "展开 X 侧栏" : "收起 X 侧栏";
-      this.toggle.setAttribute("aria-label", this.toggle.title);
-      this.toggle.setAttribute("aria-expanded", String(!settings.xCollapseSidebar));
-      this.scan();
-    }
-    scan() {
-      this.posts.reconcile();
-      this.videos?.reconcile();
-      this.images?.reconcile();
-      this.viewport?.reconcile();
-      this.scanNavigation();
-      this.ads.reconcile(this.settings.xHideAds);
-    }
-    scanNavigation() {
-      const nav = document.querySelector('header[role="banner"] nav');
-      const rail = nav?.parentElement;
-      if (rail && nav && this.toggle && this.brand) {
-        if (this.rail !== rail) {
-          this.rail?.removeAttribute("data-ft-x-rail");
-          this.rail = rail;
-          rail.setAttribute("data-ft-x-rail", "");
-        }
-        if (this.brand.parentElement !== rail || this.brand.nextElementSibling !== nav) rail.insertBefore(this.brand, nav);
-        const logo = [...document.querySelectorAll('header[role="banner"] h1 a[href="/home"],header[role="banner"] a[aria-label="X"][href="/home"]')].find((node) => !node.closest("nav,[data-ft-owned]") && !node.contains(nav) && !node.contains(this.toggle ?? null));
-        if (this.logo !== logo) {
-          this.logo?.removeAttribute("data-ft-x-native-logo");
-          this.logo = logo ?? void 0;
-          logo?.setAttribute("data-ft-x-native-logo", "");
-        }
-        for (const node of this.labels) if (!node.isConnected || node.querySelector("svg,img")) {
-          node.removeAttribute("data-ft-x-nav-label");
-          this.labels.delete(node);
-        }
-        for (const node of nav.querySelectorAll("a [dir],button [dir]")) {
-          if (!node.textContent?.trim() || node.querySelector("svg,img") || node.closest("svg")) continue;
-          if (!node.hasAttribute("data-ft-x-nav-label")) node.setAttribute("data-ft-x-nav-label", "");
-          this.labels.add(node);
-        }
-      }
-      if (!this.settings.xHideFloatingIcons) {
-        this.restoreIcons();
-        return;
-      }
-      for (const node of this.hidden) if (!node.isConnected) this.hidden.delete(node);
-      for (const node of document.querySelectorAll('[data-testid="GrokDrawer"],[data-testid="chat-drawer-root"]')) {
-        node.setAttribute("data-ft-x-hidden-icon", "");
-        this.hidden.add(node);
-      }
-      for (const candidate of document.querySelectorAll(launchers)) {
-        if (candidate.closest('header[role="banner"],article,[data-ft-owned]')) continue;
-        for (let node = candidate; node && node !== document.body; node = node.parentElement) {
-          if (this.hidden.has(node)) break;
-          const rect = node.getBoundingClientRect();
-          if (getComputedStyle(node).position !== "fixed") continue;
-          if (rect.width > 0 && rect.width <= 180 && rect.height > 0 && rect.height <= 180 && rect.left > innerWidth / 2 && rect.top > innerHeight / 2) {
-            node.setAttribute("data-ft-x-hidden-icon", "");
-            this.hidden.add(node);
-          }
-          break;
-        }
-      }
-    }
-    restoreIcons() {
-      for (const node of this.hidden) node.removeAttribute("data-ft-x-hidden-icon");
-      this.hidden.clear();
-    }
-    onRoute = () => {
-      this.viewport?.reconcile();
-    };
-    exitPost = (event) => {
-      if (event.key !== "Escape" || event.repeat || event.defaultPrevented || event.isComposing || !isXPostPath(location.pathname ?? "") || document.fullscreenElement) return;
-      const post = document.querySelector("[data-ft-x-native-post]");
-      if (event.composedPath().some((node) => node instanceof HTMLElement && (node.isContentEditable || node.matches('input,textarea,select,[contenteditable="true"],[role="menu"]') || node.matches('dialog,[role="dialog"]') && node !== post && !node.contains(post)))) return;
-      if ([...document.querySelectorAll('[role="dialog"],dialog[open]')].some((node) => node !== post && !node.contains(post)) || document.querySelector('[role="menu"],[data-ft-owned="word-popup"],:popover-open')) return;
-      const back = (post ?? document).querySelector('[data-testid="primaryColumn"] [data-testid="app-bar-back"]');
-      if (!back) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      this.viewport?.restore();
-      back.click();
-    };
-    destroy() {
-      this.posts.destroy();
-      this.viewport?.destroy();
-      this.videos?.destroy();
-      this.images?.destroy();
-      this.ads.destroy();
-      this.observer?.disconnect();
-      this.work?.destroy();
-      this.restoreIcons();
-      this.toggle?.remove();
-      this.brand?.remove();
-      document.removeEventListener("keydown", this.exitPost, true);
-      window.removeEventListener("popstate", this.onRoute);
-      this.logo?.removeAttribute("data-ft-x-native-logo");
-      this.rail?.removeAttribute("data-ft-x-rail");
-      for (const node of this.labels) node.removeAttribute("data-ft-x-nav-label");
-      this.labels.clear();
-      document.documentElement.removeAttribute("data-ft-x-sidebar-collapsed");
-      document.documentElement.removeAttribute("data-ft-x-right-hidden");
-      document.documentElement.removeAttribute("data-ft-x-hide-icons");
-    }
-  };
-
-  // src/x-search.ts
-  var searchInput = '[data-testid="SearchBox_Search_Input"]';
-  var exploreLink = 'header[role="banner"] a[data-testid="AppTabBar_Explore_Link"],header[role="banner"] a[href="/explore"]';
-  var focusable = 'a[href],button,input,select,textarea,[tabindex]:not([tabindex="-1"])';
-  var XSearch = class {
-    observer;
-    surface;
-    form;
-    input;
-    header;
-    backdrop;
-    previousFocus;
-    path = [];
-    savedAttributes = /* @__PURE__ */ new Map();
-    route = "";
-    timer;
-    constructor() {
-      if (!isXSite()) return;
-      document.addEventListener("click", this.click, true);
-      document.addEventListener("keydown", this.keydown, true);
-      window.addEventListener("popstate", this.routeChanged);
-    }
-    click = (event) => {
-      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-      const target = event.target instanceof Element ? event.target.closest(exploreLink) : null;
-      if (!target || !this.open(target)) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-    };
-    open(trigger) {
-      if (this.surface) {
-        this.input?.focus();
-        return true;
-      }
-      const input = document.querySelector(`[data-testid="sidebarColumn"] ${searchInput}`);
-      const form = input?.closest("form");
-      const surface = form?.parentElement;
-      const sidebar = input?.closest('[data-testid="sidebarColumn"]');
-      if (!input || !form || !surface || !sidebar || surface === sidebar || typeof surface.showPopover !== "function" || surface.hasAttribute("popover")) return false;
-      this.surface = surface;
-      this.form = form;
-      this.input = input;
-      this.previousFocus = trigger;
-      this.route = location.href;
-      for (const attribute of ["role", "aria-modal", "aria-label", "popover"]) this.savedAttributes.set(attribute, surface.getAttribute(attribute));
-      surface.setAttribute("role", "dialog");
-      surface.setAttribute("aria-modal", "true");
-      surface.setAttribute("aria-label", "搜索 X");
-      surface.setAttribute("data-ft-x-search-surface", "");
-      for (let node = surface.parentElement; node; node = node.parentElement) {
-        node.setAttribute("data-ft-x-search-path", "");
-        this.path.push(node);
-        if (node === sidebar) break;
-      }
-      const backdrop = document.createElement("div");
-      backdrop.dataset.ftOwned = "x-search-backdrop";
-      backdrop.setAttribute("popover", "manual");
-      surface.setAttribute("popover", "manual");
-      backdrop.addEventListener("click", () => this.close());
-      const header = document.createElement("div");
-      header.dataset.ftOwned = "x-search-header";
-      const title = document.createElement("strong");
-      title.textContent = "搜索";
-      const close = document.createElement("button");
-      close.type = "button";
-      close.textContent = "×";
-      close.setAttribute("aria-label", "关闭搜索");
-      close.onclick = () => this.close();
-      header.append(close, title);
-      surface.prepend(header);
-      document.body.append(backdrop);
-      this.header = header;
-      this.backdrop = backdrop;
-      const body = getComputedStyle(document.body);
-      surface.style.setProperty("--ft-x-search-color", getComputedStyle(input).color);
-      surface.style.setProperty("--ft-x-search-bg", body.backgroundColor === "rgba(0, 0, 0, 0)" ? "Canvas" : body.backgroundColor);
-      document.documentElement.setAttribute("data-ft-x-search-open", "");
-      backdrop.showPopover();
-      surface.showPopover();
-      form.addEventListener("submit", this.submitted);
-      this.observer = new MutationObserver(() => {
-        if (!surface.isConnected || !surface.contains(input) || location.href !== this.route) this.close(false);
-      });
-      this.observer.observe(document.body, { childList: true, subtree: true });
-      input.focus({ preventScroll: true });
-      return true;
-    }
-    submitted = () => {
-      this.timer = setTimeout(() => this.close(false), 0);
-    };
-    routeChanged = () => {
-      if (this.surface && location.href !== this.route) this.close(false);
-    };
-    keydown = (event) => {
-      if (!this.surface || event.isComposing) return;
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        this.close();
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const controls = [...this.surface.querySelectorAll(focusable)].filter((node) => !node.matches(':disabled,[tabindex="-1"]') && node.getClientRects().length > 0 && getComputedStyle(node).visibility !== "hidden");
-      const first = controls[0];
-      const last = controls.at(-1);
-      const active = document.activeElement;
-      if (!first || !last) return;
-      if (!this.surface.contains(active) || (event.shiftKey ? active === first : active === last)) {
-        event.preventDefault();
-        (event.shiftKey ? last : first).focus();
-      }
-    };
-    close(restoreFocus = true) {
-      if (!this.surface) return;
-      this.observer?.disconnect();
-      this.observer = void 0;
-      clearTimeout(this.timer);
-      this.form?.removeEventListener("submit", this.submitted);
-      if (this.surface.contains(document.activeElement) && document.activeElement instanceof HTMLElement) document.activeElement.blur();
-      if (this.surface.matches(":popover-open")) this.surface.hidePopover();
-      if (this.backdrop?.matches(":popover-open")) this.backdrop.hidePopover();
-      this.header?.remove();
-      this.backdrop?.remove();
-      this.surface.removeAttribute("data-ft-x-search-surface");
-      this.surface.style.removeProperty("--ft-x-search-color");
-      this.surface.style.removeProperty("--ft-x-search-bg");
-      for (const [attribute, value] of this.savedAttributes) {
-        if (value === null) this.surface.removeAttribute(attribute);
-        else this.surface.setAttribute(attribute, value);
-      }
-      this.savedAttributes.clear();
-      for (const node of this.path) node.removeAttribute("data-ft-x-search-path");
-      this.path = [];
-      document.documentElement.removeAttribute("data-ft-x-search-open");
-      this.surface = void 0;
-      this.form = void 0;
-      this.input = void 0;
-      this.header = void 0;
-      this.backdrop = void 0;
-      if (restoreFocus && this.previousFocus?.isConnected) this.previousFocus.focus({ preventScroll: true });
-      this.previousFocus = void 0;
-    }
-    destroy() {
-      this.close(false);
-      document.removeEventListener("click", this.click, true);
-      document.removeEventListener("keydown", this.keydown, true);
-      window.removeEventListener("popstate", this.routeChanged);
-    }
-  };
-
   // src/reddit-media-resize.ts
   var mediaSelector = 'shreddit-post [slot="post-media-container"],shreddit-post [slot="post-media"],[data-testid="post-container"] [data-click-id="media"],.thing.link > .entry .expando';
   var videoSelector = "shreddit-player,reddit-video-player,video,iframe";
@@ -4939,9 +4138,9 @@
   function isRedditAd(post) {
     if (post.matches(`${adContainerSelector},.thing.link.promoted`)) return true;
     if (promotionAttributes.some((name) => post.hasAttribute(name) && !/^(false|0)$/i.test(post.getAttribute(name)?.trim() ?? ""))) return true;
-    for (const marker2 of post.querySelectorAll('[slot="credit-bar"] :is(span,a),[data-testid="promoted-label"],.promoted-tag')) {
-      if (marker2.closest(postSelector) !== post || marker2.closest("[data-ft-owned]")) continue;
-      if (marker2.matches('[data-testid="promoted-label"],.promoted-tag') || /^(Ad|Promoted|Sponsored|广告|廣告|推广|推廣|赞助|贊助)$/i.test(marker2.textContent?.trim() ?? "")) return true;
+    for (const marker of post.querySelectorAll('[slot="credit-bar"] :is(span,a),[data-testid="promoted-label"],.promoted-tag')) {
+      if (marker.closest(postSelector) !== post || marker.closest("[data-ft-owned]")) continue;
+      if (marker.matches('[data-testid="promoted-label"],.promoted-tag') || /^(Ad|Promoted|Sponsored|广告|廣告|推广|推廣|赞助|贊助)$/i.test(marker.textContent?.trim() ?? "")) return true;
     }
     return false;
   }
@@ -5011,10 +4210,6 @@
 [data-ft-owned="translation"].ft-translation-title :is(h1,h2,h3){font-size:inherit;font-weight:inherit;line-height:inherit}
 
 [data-ft-duplicate]{display:none!important}
-/* Keep post actions together even in the wider reading column. */
-[data-ft-x-right-hidden] article[data-testid="tweet"] [role="group"]:has([data-testid="reply"]):has(:is([data-testid="like"],[data-testid="unlike"])){justify-content:flex-start!important;gap:28px;flex-wrap:wrap}
-[data-ft-x-right-hidden] article[data-testid="tweet"] [role="group"]:has([data-testid="reply"]):has(:is([data-testid="like"],[data-testid="unlike"])) > div{flex:0 0 auto!important;width:auto!important;margin-inline:0!important}
-
 /* HN Reader translation themes, scoped to bilingual translation boxes. */
 [data-ft-owned="translation"][data-translation-theme]:not(.ft-translation-only){border:0;padding:0;background:none}
 [data-ft-owned="translation"][data-translation-theme="quote"]:not(.ft-translation-only){border-inline-start:2px solid #8885;padding:.35em .65em;border-radius:0 .4em .4em 0;background:#88888808}
@@ -5030,52 +4225,9 @@
 article[data-testid="tweet"] [data-ft-owned="translation"]{width:fit-content;max-width:100%;min-width:0;align-self:flex-start}
 article[data-testid="tweet"] [data-ft-owned="translation"]:not(.ft-translation-only){margin-block-start:12px}
 /* The host's line clamp otherwise clips translations inserted between paragraphs. */
-article[data-testid="tweet"] [data-testid="tweetText"]:has([data-ft-owned="translation"]){display:block!important;-webkit-line-clamp:unset!important;line-clamp:unset!important;max-height:none!important;overflow:visible!important}
 article[data-testid="tweet"] [data-ft-owned="translation"]{height:auto;max-height:none;overflow:visible;text-overflow:clip}
-/* Neutralize the post-wide hover fill while preserving child button feedback. */
-article[data-testid="tweet"]{background-color:transparent!important}
-/* Keep X post text at the timeline reading size, including expanded posts. */
-article[data-testid="tweet"] [data-testid="tweetText"],
-article[data-testid="tweet"] [data-testid="tweetText"] [data-ft-owned="translation"],
-article[data-testid="tweet"] [data-testid="tweetText"] + [data-ft-owned="translation"]{font-size:15px!important;line-height:20px!important}
-/* Desktop rails must not reserve space or force a hidden banner onto phones. */
-@media(min-width:701px){
-[data-ft-x-sidebar-collapsed] header[role="banner"]{display:flex!important;position:fixed!important;inset:0 auto 0 0;width:72px!important;z-index:100;align-items:center!important;background:Canvas}
-[data-ft-x-sidebar-collapsed][data-ft-x-right-hidden]{--ft-x-content-edge:15vw}
-[data-ft-x-sidebar-collapsed][data-ft-x-right-hidden] header[role="banner"]{left:max(0px,calc(15vw - 120px))!important}
-/* Desktop X keeps a 275px min-width on several nested sidebar containers. */
-[data-ft-x-sidebar-collapsed] header[role="banner"] div:has(nav),[data-ft-x-sidebar-collapsed] [data-ft-x-rail] > div{width:72px!important;min-width:0!important;max-width:72px!important;box-sizing:border-box!important;margin-inline:0!important;padding-inline:0!important;align-items:center!important}
-[data-ft-x-sidebar-collapsed] header[role="banner"] nav{align-items:center!important;width:100%!important}
-[data-ft-x-sidebar-collapsed] header[role="banner"] nav :is(a,button){width:52px!important;box-sizing:border-box!important;align-self:center!important;align-items:center!important;margin-inline:auto!important;padding-inline:0!important;justify-content:center!important}
-[data-ft-x-sidebar-collapsed] header[role="banner"] nav :is(a,button) > div{padding:12px!important;justify-content:center!important}
-[data-ft-x-sidebar-collapsed] header[role="banner"] nav [data-ft-x-nav-label]{display:none!important}
-header[role="banner"] [data-testid="SideNav_NewTweet_Button"]{position:relative!important;display:flex!important;align-items:center!important;justify-content:center!important;box-sizing:border-box!important;border-radius:9999px!important;color:#fff!important;background:#0f1419!important}
-header[role="banner"] [data-testid="SideNav_NewTweet_Button"] > *{display:none!important}
-header[role="banner"] [data-testid="SideNav_NewTweet_Button"]::after{content:attr(aria-label);display:grid;place-items:center;position:absolute;inset:0;color:#fff!important;-webkit-text-fill-color:#fff!important;font:700 15px/1.3 system-ui,sans-serif;text-align:center}
-[data-ft-x-sidebar-collapsed] header[role="banner"] [data-testid="SideNav_NewTweet_Button"]{width:48px!important;min-width:48px!important;max-width:48px!important;height:48px!important;min-height:48px!important;max-height:48px!important;flex:0 0 auto!important;padding:0!important;margin-inline:auto!important;align-self:center!important}
-[data-ft-x-sidebar-collapsed] header[role="banner"] [data-testid="SideNav_NewTweet_Button"] > *{display:none!important}
-[data-ft-x-sidebar-collapsed] header[role="banner"] [data-testid="SideNav_NewTweet_Button"]::after{content:'';inset:50% auto auto 50%;width:20px;height:20px;transform:translate(-50%,-50%);background:linear-gradient(currentColor,currentColor) center/2px 18px no-repeat,linear-gradient(currentColor,currentColor) center/18px 2px no-repeat}
-[data-ft-x-sidebar-collapsed] header[role="banner"] [data-testid="SideNav_AccountSwitcher_Button"]{width:56px!important;padding:8px!important}
-[data-ft-x-sidebar-collapsed] header[role="banner"] [data-testid="SideNav_AccountSwitcher_Button"] > div:not(:has(img)){display:none!important}
-}
-[data-ft-x-right-hidden] [data-testid="sidebarColumn"]{display:none!important}
-@media(min-width:701px){
-[data-ft-x-right-hidden]:not([data-ft-x-sidebar-collapsed]){--ft-x-nav-width:clamp(240px,24vw,320px);--ft-x-content-edge:var(--ft-x-nav-width)}
-[data-ft-x-right-hidden]:not([data-ft-x-sidebar-collapsed]) header[role="banner"]{width:var(--ft-x-nav-width)!important;flex:0 0 var(--ft-x-nav-width)!important}
-[data-ft-x-right-hidden]:not([data-ft-x-sidebar-collapsed]) main[role="main"]{min-width:0!important}
-[data-ft-x-right-hidden]:not([data-ft-x-sidebar-collapsed]) main[role="main"] > div{width:calc(100vw - 2 * var(--ft-x-nav-width))!important;max-width:calc(100vw - 2 * var(--ft-x-nav-width))!important;min-width:0!important}
-}
-[data-ft-x-right-hidden] main[role="main"] :is(div:has(> [data-testid="primaryColumn"]),[data-testid="primaryColumn"]){width:100%!important;max-width:none!important;min-width:0!important;flex-basis:auto!important}
-[data-ft-x-right-hidden] [data-testid="primaryColumn"] div:has(> section [data-testid="cellInnerDiv"]){width:100%!important;max-width:none!important}
-/* Article has additional narrow wrappers inside the already expanded column. */
-[data-ft-x-right-hidden] [data-testid="primaryColumn"] :is([data-testid="twitterArticleReadView"],[data-testid="twitterArticleTitle"],[data-testid="twitter-article-title"],[data-testid="twitterArticleRichTextView"],[data-testid="longformRichTextComponent"],div:has([data-testid="twitterArticleRichTextView"],[data-testid="longformRichTextComponent"])){box-sizing:border-box;width:100%!important;max-width:none!important;min-width:0!important}
-/* The expanded Article reader sits outside primaryColumn. */
-@media(min-width:701px){
-[data-ft-x-right-hidden] div:has(> div > article[data-testid="twitterArticleReadView"]):not([data-testid="primaryColumn"] *){width:70vw!important;max-width:calc(100vw - 32px)!important;margin-inline:auto}
-}
-[data-ft-x-right-hidden] div:has(> div > article[data-testid="twitterArticleReadView"]):not([data-testid="primaryColumn"] *) > div{width:100%!important;max-width:none!important}
 :is([data-testid="twitterArticleTitle"],[data-testid="twitter-article-title"]) + [data-ft-owned="translation"]{align-self:stretch;width:100%}
-/* Keep inline videos compact when the reading column is widened. */
+/* Media resize controls below are only mounted on Reddit. */
 [data-ft-video-resizable]:not(:fullscreen):not(:has(:fullscreen)):not(:fullscreen *){position:relative!important;width:min(100%,var(--ft-media-fit-width,var(--ft-x-video-width,420px)))!important;max-width:var(--ft-x-video-width,420px)!important;min-width:0!important}
 [data-ft-image-resizable]{position:relative!important;width:100%!important;max-width:var(--ft-x-image-width,420px)!important;min-width:0!important}
 :is([data-ft-video-resizable],[data-ft-image-resizable]){box-sizing:border-box}
@@ -5086,22 +4238,6 @@ header[role="banner"] [data-testid="SideNav_NewTweet_Button"]::after{content:att
 [data-ft-reddit-media="image"] a > img,[data-ft-reddit-media="image"] > img{width:100%!important;height:auto!important}
 [data-ft-reddit-media] :is(shreddit-player,reddit-video-player,shreddit-gallery){display:block;max-width:100%;width:100%}
 [data-ft-reddit-media]:not(:fullscreen):not(:has(:fullscreen)):not(:fullscreen *) video{max-width:100%!important;height:auto!important}
-/* X carousel tiles retain their old pixel width after their parent is resized. */
-[data-ft-image-resizable] [data-testid="ScrollSnap-List"]:has([data-testid="tweetPhoto"]){margin-inline:0!important;padding-inline:0!important;scroll-padding-inline:0!important;gap:6px!important;align-items:flex-start!important;min-width:0!important;width:100%!important;height:auto!important}
-[data-ft-image-resizable] [data-testid="ScrollSnap-List"]:has([data-testid="tweetPhoto"]) > div{flex:0 0 calc((100% - 6px)/2)!important;width:calc((100% - 6px)/2)!important;min-width:0!important;height:auto!important;margin-inline:0!important}
-[data-ft-image-resizable] [data-testid="ScrollSnap-List"]:has([data-testid="tweetPhoto"]) > div:only-child{flex-basis:100%!important;width:100%!important}
-[data-ft-image-resizable] [data-testid="ScrollSnap-List"]:has([data-testid="tweetPhoto"]) > div > div{width:100%!important;height:auto!important;min-width:0!important}
-/* Let the intrinsic image ratio size each carousel tile instead of X's fixed frame. */
-[data-ft-image-resizable] [data-testid="ScrollSnap-List"] :is(div,a):has([data-testid="tweetPhoto"]),[data-ft-image-resizable] [data-testid="ScrollSnap-List"] [data-testid="tweetPhoto"],[data-ft-image-resizable] [data-testid="ScrollSnap-List"] [data-testid="tweetPhoto"] div:has(img){position:relative!important;inset:auto!important;height:auto!important;min-height:0!important;max-height:none!important;aspect-ratio:auto!important;padding-block:0!important}
-[data-ft-image-resizable] [data-testid="ScrollSnap-List"] div[style*="padding-bottom"]:empty{height:0!important;min-height:0!important;padding-bottom:0!important}
-/* X renders photos as background layers with an img fallback; fit both without cropping. */
-[data-ft-image-resizable] [data-testid="ScrollSnap-List"] [data-testid="tweetPhoto"]{width:100%!important;max-width:100%!important;min-width:0!important;background-size:contain!important;background-position:center!important;background-repeat:no-repeat!important}
-[data-ft-image-resizable] [data-testid="ScrollSnap-List"] [data-testid="tweetPhoto"] [style*="background-image"]{background-size:contain!important;background-position:center!important;background-repeat:no-repeat!important}
-[data-ft-image-resizable] [data-testid="ScrollSnap-List"] [data-testid="tweetPhoto"] img{display:block!important;position:relative!important;inset:auto!important;opacity:1!important;width:100%!important;height:auto!important;max-width:100%!important;max-height:none!important;object-fit:contain!important;object-position:center!important}
-/* Remove the host's old ratio spacer while keeping the carousel in normal flow. */
-[data-ft-image-resizable] div:has([data-testid="ScrollSnap-List"] [data-testid="tweetPhoto"]){height:auto!important;min-height:0!important}
-[data-ft-image-resizable] div[style*="padding-bottom"]:has([data-testid="ScrollSnap-List"] [data-testid="tweetPhoto"]){padding-bottom:0!important}
-[data-ft-image-resizable] div[style*="padding-bottom"]:has([data-testid="ScrollSnap-List"] [data-testid="tweetPhoto"]) > *{position:relative!important;height:auto!important}
 [data-ft-owned="video-resize"]{position:absolute;inset:0;pointer-events:none;z-index:5;opacity:0;transition:opacity .15s}
 :is([data-ft-video-resizable],[data-ft-image-resizable]):hover > [data-ft-owned="video-resize"],[data-ft-owned="video-resize"]:focus-within,[data-ft-owned="video-resize"][data-dragging]{opacity:1}
 [data-ft-owned="video-resize"] button{position:absolute;pointer-events:auto;touch-action:none;border:0;padding:0;background:transparent;color:#fff}
@@ -5121,94 +4257,11 @@ header[role="banner"] [data-testid="SideNav_NewTweet_Button"]::after{content:att
 [data-ft-video-resizable]:not(:fullscreen):not(:has(:fullscreen)):not(:fullscreen *),[data-ft-image-resizable]{width:100%!important;max-width:100%!important;min-width:0!important;align-self:stretch}
 [data-ft-owned="video-resize"]{display:none!important;pointer-events:none!important}
 }
-[data-ft-x-hide-icons] :is([data-testid="GrokDrawer"],[data-testid="chat-drawer-root"]){display:none!important}
-@media(min-width:701px){
-[data-ft-x-sidebar-collapsed][data-ft-x-right-hidden] main[role="main"]{align-items:center!important;width:100%;min-width:0}
-[data-ft-x-sidebar-collapsed][data-ft-x-right-hidden] main[role="main"] > div{width:70vw!important;max-width:70vw!important;min-width:0!important;margin-inline:auto!important}
-[data-ft-x-sidebar-collapsed][data-ft-x-right-hidden] main[role="main"] :is(div:has(> [data-testid="primaryColumn"]),[data-testid="primaryColumn"]){width:100%!important;max-width:none!important;min-width:0!important;flex-basis:auto!important}
-}
-[data-ft-x-hidden-icon]{display:none!important}
-[data-ft-x-ad]{display:none!important}
 [data-ft-reddit-ad]{display:none!important}
-[data-ft-x-sidebar-collapsed][data-ft-x-right-hidden] [data-testid="primaryColumn"] div:has(> section [data-testid="cellInnerDiv"]){width:100%!important;max-width:none!important}
-/* Never hide a shared heading or navigation container. */
-@media(min-width:701px){
-a[data-ft-x-native-logo]:not(:has(nav)):not(:has([data-ft-owned="x-sidebar-toggle"])){display:none!important}
-header[role="banner"] h1:has(> a[data-ft-x-native-logo]):not(:has(nav)):not(:has([data-ft-owned="x-sidebar-toggle"])){display:none!important}
-}
-[data-ft-owned="x-sidebar-brand"]{display:flex!important;align-items:center;justify-content:center;flex:0 0 52px;width:52px;height:52px;box-sizing:border-box;margin:2px 0;color:inherit}
-[data-ft-x-sidebar-collapsed] [data-ft-owned="x-sidebar-brand"]{align-self:center!important;margin-inline:auto!important}
-[data-ft-owned="x-sidebar-toggle"]{display:grid!important;place-items:center;width:52px;height:52px;box-sizing:border-box;margin:0;padding:10px;border:0;border-radius:50%;background:transparent;color:inherit;cursor:pointer}
-[data-ft-owned="x-sidebar-toggle"] > span{display:contents}
-[data-ft-owned="x-sidebar-toggle"] .ft-x-brand{grid-area:1 / 1;display:block;width:30px;height:30px;fill:currentColor}
-[data-ft-owned="x-sidebar-toggle"] .ft-x-state{grid-area:1 / 1;display:block;width:26px;height:26px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;opacity:0}
-[data-ft-owned="x-sidebar-toggle"][aria-expanded="true"] .ft-x-state{transform:scaleX(-1)}
-[data-ft-owned="x-sidebar-toggle"]:hover{background:#8882}
-[data-ft-owned="x-sidebar-toggle"]:is(:hover,:focus-visible) .ft-x-brand{opacity:0}
-[data-ft-owned="x-sidebar-toggle"]:is(:hover,:focus-visible) .ft-x-state{opacity:1}
-[data-ft-owned="x-sidebar-toggle"]:focus-visible{outline:2px solid #1d9bf0;outline-offset:2px}
-
-/* Lift the native search visually without reparenting React-managed nodes. */
-[data-ft-x-search-open]{overflow:hidden!important}
-[data-ft-owned="x-search-backdrop"]{position:fixed;inset:0;width:100vw;height:100dvh;margin:0;padding:0;border:0;max-width:none;max-height:none;z-index:2147483000;background:#5b708366}
-[data-ft-x-search-open] [data-testid="sidebarColumn"][data-ft-x-search-path]{display:block!important;position:fixed!important;inset:0 auto auto 0!important;width:0!important;min-width:0!important;height:0!important;z-index:2147483001!important;overflow:visible!important}
-[data-ft-x-search-path]:not([data-testid="sidebarColumn"]){display:contents!important}
-[data-ft-x-search-path] > :not([data-ft-x-search-path]):not([data-ft-x-search-surface]){display:none!important}
-[data-ft-x-search-path]{transform:none!important;filter:none!important;contain:none!important;content-visibility:visible!important}
-[data-ft-x-search-surface]{display:block!important;position:fixed!important;inset:max(16px,8vh) auto auto 50%!important;transform:translateX(-50%)!important;width:min(600px,calc(100vw - 32px))!important;max-width:none!important;min-width:0!important;max-height:none!important;overflow:visible!important;box-sizing:border-box!important;margin:0!important;padding:12px 16px 20px!important;border:1px solid #8884!important;border-radius:16px!important;background:var(--ft-x-search-bg,Canvas)!important;color:var(--ft-x-search-color,CanvasText)!important;box-shadow:0 12px 48px #0003;z-index:2147483001!important}
-[data-ft-owned="x-search-header"]{display:flex;align-items:center;gap:20px;margin:0 0 16px;font:700 20px/1.3 system-ui,sans-serif}
-[data-ft-owned="x-search-header"] button{display:grid;place-items:center;width:34px;height:34px;padding:0;border:0;border-radius:50%;background:transparent;color:inherit;font:28px/1 system-ui;cursor:pointer}
-[data-ft-owned="x-search-header"] button:hover{background:#8882}
-[data-ft-owned="x-search-header"] button:focus-visible{outline:2px solid #1d9bf0;outline-offset:2px}
-[data-ft-x-search-surface] form{width:100%!important;max-width:none!important;min-width:0!important;margin:0!important}
-[data-ft-x-search-surface] [role="listbox"]{max-height:60dvh!important;overflow-y:auto!important;overscroll-behavior:contain}
-
-/* Keep the preview's final sentence and translation whole; defer the remainder. */
-[data-ft-long-source],[data-ft-long-more]{display:none!important}
-[data-ft-long-post] .ft-long-post-viewport{overflow-anchor:none}
-[data-ft-long-post] [data-testid="tweetText"]{white-space:pre-wrap}
-[data-ft-long-remainder][hidden]{display:none!important}
-[data-ft-owned="long-post-toggle"]{display:block;border:0;background:none;color:#1d9bf0;padding:6px 0;cursor:pointer;font:inherit;text-align:start}
-
-[data-ft-owned="long-post-ellipsis"]{color:#536471;line-height:20px}
-[data-ft-long-post][data-expanded] > [data-ft-owned="long-post-ellipsis"]{display:none}
-
-[data-ft-owned="long-post-toggle"][hidden]{display:none}
-
-/* Prepare Post skeleton and content geometry before the first paint. The runtime
-   marker only identifies the scroll target; it must not change the layout. */
-[data-ft-x-post-layout] [role="dialog"]:has([data-testid="primaryColumn"]):not(:has([role="dialog"] [data-testid="primaryColumn"])){overflow-y:auto!important;overscroll-behavior:contain;scrollbar-gutter:stable}
-[data-ft-x-post-layout] [role="dialog"] [data-testid="primaryColumn"]{box-sizing:border-box;width:100%!important;max-width:none!important;min-width:0!important;flex:1 1 auto!important;padding-inline:var(--ft-x-content-edge,15vw)!important}
-@media(max-width:700px){
-/* Fill the available mobile column in either sidebar setting. Native tablet
-   navigation can keep its own width; no viewport-based rail margin is added. */
-[data-ft-x-right-hidden]{--ft-x-content-edge:8px}
-[data-ft-x-right-hidden] main[role="main"]{flex:1 1 0%!important;min-width:0!important;align-items:stretch!important}
-[data-ft-x-right-hidden] main[role="main"] > div{box-sizing:border-box;width:100%!important;max-width:100%!important;min-width:0!important;margin-inline:0!important}
-[data-ft-x-right-hidden] div:has(> div > article[data-testid="twitterArticleReadView"]):not([data-testid="primaryColumn"] *){box-sizing:border-box;width:100%!important;max-width:100%!important;min-width:0!important;margin-inline:0!important}
-[data-ft-owned="x-sidebar-brand"]{display:none!important}
-[data-ft-x-post-layout] [role="dialog"] [data-testid="primaryColumn"]{padding-inline:8px!important}
-/* Shrink both the avatar and its reserved column so text can move left. Keep
-   the column height untouched for native conversation connector lines. */
-article[data-testid="tweet"] div:has(> [data-testid="Tweet-User-Avatar"]){width:28px!important;min-width:28px!important;max-width:28px!important;flex:0 0 28px!important;margin-inline-end:6px!important}
-article[data-testid="tweet"] [data-testid="Tweet-User-Avatar"]{width:28px!important;height:28px!important;min-width:28px!important;max-width:28px!important;flex:0 0 auto!important}
-/* X sets 40px inline on this deeper container, below the outer avatar slot. */
-article[data-testid="tweet"] [data-testid="Tweet-User-Avatar"] [data-testid^="UserAvatar-Container-"]{width:28px!important;height:28px!important;min-width:0!important;max-width:100%!important}
-/* Keep counts and share controls together without the desktop wrapping gap. */
-[data-ft-x-right-hidden] article[data-testid="tweet"] [role="group"]:has([data-testid="reply"]):has(:is([data-testid="like"],[data-testid="unlike"])){justify-content:space-between!important;gap:0!important;flex-wrap:nowrap!important;min-width:0!important}
-[data-ft-x-right-hidden] article[data-testid="tweet"] [role="group"]:has([data-testid="reply"]):has(:is([data-testid="like"],[data-testid="unlike"])) > div{flex:0 1 auto!important;min-width:0!important}
-[data-ft-x-right-hidden] article[data-testid="tweet"] [role="group"]:has([data-testid="reply"]):has(:is([data-testid="like"],[data-testid="unlike"])) :is(button,[role="button"],a){min-width:0!important;min-height:36px}
-[data-ft-x-right-hidden] article[data-testid="tweet"] [role="group"]:has([data-testid="reply"]):has(:is([data-testid="like"],[data-testid="unlike"])) span{font-size:12px!important;white-space:nowrap}
-}
 `;
     document.head.append(style);
     let settings = loadSettings();
     const fonts = mountFontStyles(settings.fonts);
-    const layout = new XLayout(settings, (collapsed) => {
-      settings = { ...settings, xCollapseSidebar: collapsed };
-      saveSettings(settings);
-    });
-    const search = new XSearch();
     const redditMedia = new RedditMediaResize();
     const redditAds = new RedditAds();
     const cache = new TranslationCache();
@@ -5227,16 +4280,14 @@ article[data-testid="tweet"] [data-testid="Tweet-User-Avatar"] [data-testid^="Us
     const reloadProfile = () => {
       const next = loadSettings();
       settings = next;
-      layout.update(next);
       fonts.update(next.fonts);
       restart();
     };
     const removeControls = mountControls(() => ({ ...settings, translationOnly: loadTranslationOnly() }), (next) => {
-      const styleOnly = JSON.stringify({ ...settings, fonts: next.fonts, translationTheme: next.translationTheme, xCollapseSidebar: next.xCollapseSidebar, xHideFloatingIcons: next.xHideFloatingIcons, xHideRightSidebar: next.xHideRightSidebar, xHideAds: next.xHideAds }) === JSON.stringify(next);
+      const styleOnly = JSON.stringify({ ...settings, fonts: next.fonts, translationTheme: next.translationTheme }) === JSON.stringify(next);
       settings = next;
       saveTranslationOnly(next.translationOnly);
       saveSettings(next);
-      layout.update(next);
       fonts.update(next.fonts);
       if (styleOnly && runtime) runtime.setTranslationTheme(next.translationTheme);
       else restart();
@@ -5246,10 +4297,7 @@ article[data-testid="tweet"] [data-testid="Tweet-User-Avatar"] [data-testid^="Us
       runtime?.destroy();
       runtime = void 0;
       cache.flush();
-      search.close(false);
       if (!event.persisted) {
-        search.destroy();
-        layout.destroy();
         redditMedia.destroy();
         redditAds.destroy();
         removeControls();
