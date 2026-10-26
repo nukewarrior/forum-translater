@@ -94,25 +94,27 @@ it.each([
     const payload = JSON.parse(options.data) as { input: { content: string }[] };
     const sections = JSON.parse(payload.input[1]?.content ?? '[]') as { text: string }[];
     sent.push(sections.map(section => section.text));
-    const responseText = sent.length === 1
+    const firstAttempt = sent.length === 1;
+    const responseText = firstAttempt
       ? event({ type: 'response.output_text.delta', delta: `{"section_0":"第一段 ⟦0⟧","section_1":${unfinished}` }) + event({ type: 'response.failed' })
-      : event({ type: 'response.output_text.delta', delta: '{"section_0":"第二段 ⟦1⟧"}' }) + event({ type: 'response.completed' });
-    queueMicrotask(() => options[callback]?.({ status: 200, responseText }));
+      : event({ type: 'response.output_text.delta', delta: '{"section_0":"第一段 ⟦0⟧","section_1":"第二段 ⟦1⟧"}' }) + event({ type: 'response.completed' });
+    queueMicrotask(() => firstAttempt
+      ? options[callback]?.({ status: 200, responseText })
+      : options.onload?.({ status: 200, responseText }));
     return { abort: vi.fn() };
   });
   vi.stubGlobal('GM_xmlhttpRequest', request);
   const signal = new AbortController().signal;
   const first = batcher.request('first', { text: 'First ⟦0⟧' }, 'visible', signal, vi.fn());
   const second = batcher.request('second', { text: 'Second ⟦1⟧' }, 'visible', signal, vi.fn());
-  const secondResolved = vi.fn(); void second.then(secondResolved);
+  const firstResolved = vi.fn(); void first.then(firstResolved);
   await vi.advanceTimersByTimeAsync(25);
-  expect(await first).toBe('第一段 ⟦0⟧');
-  expect(secondResolved).not.toHaveBeenCalled();
+  expect(firstResolved).not.toHaveBeenCalled();
   expect(request).toHaveBeenCalledOnce();
   await vi.advanceTimersByTimeAsync(1000);
-  expect(await second).toBe('第二段 ⟦1⟧');
+  expect(await Promise.all([first, second])).toEqual(['第一段 ⟦0⟧', '第二段 ⟦1⟧']);
   expect(request).toHaveBeenCalledTimes(2);
-  expect(sent).toEqual([['First ⟦0⟧', 'Second ⟦1⟧'], ['Second ⟦1⟧']]);
+  expect(sent).toEqual([['First ⟦0⟧', 'Second ⟦1⟧'], ['First ⟦0⟧', 'Second ⟦1⟧']]);
   batcher.destroy(); tasks.destroy();
 });
 it('passes selected effort and fast tier to the transport', async () => {
@@ -172,12 +174,24 @@ it('isolates models and prompts in cache without persisting credentials in cache
   await expect(translateAi('Hello', { ...ai, apiKey: '' }, new AbortController().signal)).resolves.toBe('你好');
 });
 
-it('returns a validated streamed translation before connection close and frees transport', async () => {
+it('previews complete JSON but waits for SSE success and HTTP EOF without aborting', async () => {
   let options: GmRequestOptions | undefined; const abort = vi.fn();
   vi.stubGlobal('GM_xmlhttpRequest', (value: GmRequestOptions) => { options = value; return { abort }; });
-  const promise = translateAi('Hello ⟦0⟧', ai, new AbortController().signal);
-  options?.onprogress?.({ status: 200, responseText: event({ type: 'response.output_text.delta', delta: '{"section_0":"你好 ⟦0⟧"}' }) });
-  expect(await promise).toBe('你好 ⟦0⟧'); expect(abort).toHaveBeenCalledOnce();
+  const partial = vi.fn();
+  const promise = translateAi('Hello ⟦0⟧', ai, new AbortController().signal, partial);
+  const resolved = vi.fn(); void promise.then(resolved);
+  let responseText = event({ type: 'response.output_text.delta', delta: '{"section_0":"你好 ⟦0⟧"}' });
+  options?.onprogress?.({ status: 200, responseText });
+  expect(partial).toHaveBeenCalledWith('你好 ⟦0⟧');
+  await Promise.resolve(); expect(resolved).not.toHaveBeenCalled();
+  expect(abort).not.toHaveBeenCalled();
+  responseText += event({ type: 'response.completed' });
+  options?.onprogress?.({ status: 200, responseText });
+  await Promise.resolve(); expect(resolved).not.toHaveBeenCalled();
+  expect(abort).not.toHaveBeenCalled();
+  options?.onload?.({ status: 200, responseText });
+  expect(await promise).toBe('你好 ⟦0⟧');
+  expect(abort).not.toHaveBeenCalled();
 });
 it('does not accept early JSON with missing protected markers', async () => {
   let options: GmRequestOptions | undefined; const abort = vi.fn();
@@ -226,6 +240,8 @@ it('measures the first visible translation instead of JSON syntax or an incomple
   await vi.advanceTimersByTimeAsync(300); push('0⟧你');
   expect(partial).toHaveBeenCalledExactlyOnceWith('   ⟦0⟧你');
   await vi.advanceTimersByTimeAsync(300); push('"}');
+  responseText += event({ type: 'response.completed' });
+  options?.onload?.({ status: 200, responseText });
   await expect(promise).resolves.toBe('   ⟦0⟧你');
   expect(readTranslationMetrics().samples.at(-1)).toMatchObject({ kind: 'translation', firstContentMs: 600, durationMs: 900, success: true });
 });
@@ -243,14 +259,24 @@ it('records first content for a validated non-streaming response', async () => {
   expect(readTranslationMetrics().samples.at(-1)).toMatchObject({ kind: 'translation', firstContentMs: 400, durationMs: 400, success: true });
 });
 
-it('reads GM response streams at loadstart before the transport load event', async () => {
+it('reads GM response streams through natural EOF without cancelling the reader', async () => {
   let options: GmRequestOptions | undefined; const abort = vi.fn();
   vi.stubGlobal('GM_xmlhttpRequest', (value: GmRequestOptions) => { options = value; return { abort }; });
   const promise = translateAi('Hello ⟦0⟧', ai, new AbortController().signal);
+  const resolved = vi.fn(); void promise.then(resolved);
   expect(options?.responseType).toBe('stream');
-  const stream = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode(body)); } });
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const stream = new ReadableStream<Uint8Array>({ start(value) { controller = value; } });
+  const cancel = vi.spyOn(stream, 'cancel');
   options?.onloadstart?.({ status: 200, responseText: '', response: stream });
-  expect(await promise).toBe('你好 ⟦0⟧'); expect(abort).toHaveBeenCalledOnce();
+  controller.enqueue(new TextEncoder().encode(body));
+  await Promise.resolve(); await Promise.resolve();
+  expect(resolved).not.toHaveBeenCalled();
+  expect(abort).not.toHaveBeenCalled();
+  controller.close();
+  expect(await promise).toBe('你好 ⟦0⟧');
+  expect(abort).not.toHaveBeenCalled();
+  expect(cancel).not.toHaveBeenCalled();
 });
 
 
