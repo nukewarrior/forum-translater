@@ -602,7 +602,7 @@ it('translates dynamically identified Article title and blocks inline without ch
   expect(body.textContent).toContain('First paragraph'); expect(body.querySelector('img')).toBe(media);
 });
 
-it('recovers an Article request that finishes between fullscreen navigation and route reconciliation', async () => {
+it('preserves an in-flight Article translation during native SPA navigation without duplicate requests', async () => {
   const route = { hostname: 'x.com', href: 'https://x.com/user/status/123', pathname: '/user/status/123' };
   vi.stubGlobal('location', route);
   document.body.innerHTML = '<h1 data-testid="twitter-article-title">Memory guide</h1>';
@@ -617,7 +617,7 @@ it('recovers an Article request that finishes between fullscreen navigation and 
   await settle();
   expect(document.querySelector('[data-ft-owned="translation"]')?.textContent).toContain('记忆指南');
   expect(document.querySelector('.hnr-translation-placeholder')).toBeNull();
-  expect(translate).toHaveBeenCalledTimes(2);
+  expect(translate).toHaveBeenCalledOnce();
 });
 
 it('keeps a 231-block Article offscreen content out of the translation queue', async () => {

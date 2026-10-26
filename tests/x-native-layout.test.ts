@@ -22,7 +22,7 @@ it('only styles generated translations on X, not native tweet text', () => {
 });
 
 it('does not override X navigation, sidebars, dialogs, media or source text', () => {
-  const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
+  const css = readFileSync('src/styles.css', 'utf8');
   for (const marker of ['data-ft-x-post-layout', 'data-ft-x-right-hidden', 'data-ft-x-sidebar-collapsed', 'data-ft-x-search', 'data-ft-x-hidden-icon', 'data-ft-long-post', 'data-ft-x-ad', 'Tweet-User-Avatar']) {
     expect(css).not.toContain(marker);
   }
