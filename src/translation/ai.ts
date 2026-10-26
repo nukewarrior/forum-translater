@@ -136,15 +136,14 @@ export class ResponseStreamDecoder {
   }
 
   #consumeEvent(event: string): void {
-    for (const line of event.split(/\r?\n/)) {
-      if (!line.startsWith("data:")) continue;
-      const data = line.slice(5).trim();
-      if (!data) continue;
-      if (data === "[DONE]") {
-        this.#done = true;
-        continue;
-      }
-      const payload = JSON.parse(data) as {
+    const lines = event.split(/\r?\n/);
+    const eventName = lines.find(line => line.startsWith('event:'))?.slice(6).trim();
+    // Proxies may provide the event name only in SSE's event: field; the
+    // JSON data payload does not always contain a top-level type.
+    const data = lines.filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
+    if (!data) return;
+    if (data === '[DONE]') { this.#done = true; return; }
+    const payload = JSON.parse(data) as {
         readonly type?: unknown;
         readonly delta?: unknown;
         readonly text?: unknown;
@@ -152,18 +151,22 @@ export class ResponseStreamDecoder {
         readonly error?: ResponseOutput['error'];
         readonly response?: ResponseOutput & { usage?: unknown };
       };
-      if (payload.response?.usage) this.onUsage?.(payload.response.usage);
-      if (payload.type === "response.output_text.delta" && typeof payload.delta === "string") {
-        this.#publish(this.#content + payload.delta);
-      } else if (payload.type === "response.output_text.done" && typeof payload.text === "string") {
-        this.#publish(payload.text);
-      } else if (payload.type === "response.completed" && payload.response && !this.#content) {
+    const type = typeof payload.type === 'string' ? payload.type : eventName;
+    if (payload.response?.usage) this.onUsage?.(payload.response.usage);
+    if (type === 'response.output_text.delta' && typeof payload.delta === 'string') {
+      this.#publish(this.#content + payload.delta);
+    } else if (type === 'response.output_text.done' && typeof payload.text === 'string') {
+      this.#publish(payload.text);
+    } else if (type === 'response.completed') {
+      if (payload.response?.status === 'failed' || payload.response?.status === 'incomplete' || payload.response?.error) {
+        this.#failure = responseFailure(payload.response.error, 'AI 响应未完成');
+      } else if (payload.response && !this.#content) {
         this.#publish(decodeResponseOutput(payload.response));
-      } else if (payload.type === "response.failed" || payload.type === "response.incomplete" || payload.type === "error") {
-        this.#failure = responseFailure(payload.response?.error ?? payload.error ?? payload, "AI 响应失败");
       }
-      if (payload.type === "response.completed" || payload.type === "response.failed") this.#done = true;
+    } else if (type === 'response.failed' || type === 'response.incomplete' || type === 'error') {
+      this.#failure = responseFailure(payload.response?.error ?? payload.error ?? payload, 'AI 响应失败');
     }
+    if (type === 'response.completed' || type === 'response.failed' || type === 'response.incomplete') this.#done = true;
   }
 }
 
@@ -233,6 +236,9 @@ export class ChatCompletionStreamDecoder {
       if (payload.usage) this.onUsage?.(payload.usage);
       for (const choice of payload.choices ?? []) {
         if (choice.finish_reason === 'length') this.#failure = new Error('AI 输出超过长度限制，译文不完整');
+        // Some compatible services send finish_reason: stop and close cleanly
+        // without a separate data: [DONE]. Still wait for the transport to end.
+        if (choice.finish_reason === 'stop') this.#done = true;
         const content = choice.delta?.content;
         if (typeof content === 'string' && content) {
           this.#content += content;
