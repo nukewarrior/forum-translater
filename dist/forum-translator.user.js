@@ -3,12 +3,12 @@
 // @name:en      Forum Translator
 // @description:en Translate Reddit and X with multiple translation profiles, OpenAI-compatible APIs, and adjustable typography.
 // @namespace    sunbigfly/forum-translater
-// @version      0.3.1
+// @version      0.3.2
 // @description  支持 Reddit 与 X 多翻译 Profile、流式 AI 翻译及 X 图片视频等比缩放。
 // @homepageURL  https://github.com/nukewarrior/forum-translater
 // @supportURL   https://github.com/nukewarrior/forum-translater/issues
-// @updateURL    none
-// @downloadURL  none
+// @updateURL    https://raw.githubusercontent.com/nukewarrior/forum-translater/main/dist/forum-translator.user.js
+// @downloadURL  https://raw.githubusercontent.com/nukewarrior/forum-translater/main/dist/forum-translator.user.js
 // @author       sunbigfly
 // @license      MIT
 // @match        https://www.reddit.com/*
@@ -349,7 +349,7 @@
 
   // src/settings.ts
   var TRANSLATION_THEMES = { quote: "淡灰引用", plain: "自然正文", weakening: "弱化译文", "dividing-line": "分隔线", underline: "下划线", highlight: "柔和高亮", paper: "纸张卡片" };
-  var DEFAULTS = { fonts: DEFAULT_FONTS, xHideAds: true, xCollapseSidebar: true, xHideFloatingIcons: true, xHideRightSidebar: true, translationTheme: "quote", translationOnly: false, enabled: true, title: true, body: true, comment: true, vocabulary: true, before: 600, after: 1200, provider: "google", ai: { baseUrl: "", apiKey: "", model: "", prompt: "", requestsPerMinute: 30, tokensPerMinute: 0, reasoningEffort: "low", fastMode: false, protocol: "responses" } };
+  var DEFAULTS = { fonts: DEFAULT_FONTS, xHideAds: true, xCollapseSidebar: true, xHideFloatingIcons: true, xHideRightSidebar: true, translationTheme: "quote", translationOnly: false, enabled: true, title: true, body: true, comment: true, before: 600, after: 1200, provider: "google", ai: { baseUrl: "", apiKey: "", model: "", prompt: "", requestsPerMinute: 30, tokensPerMinute: 0, reasoningEffort: "low", fastMode: false, protocol: "responses" } };
   function normalizeSettings(raw) {
     const value = { ...DEFAULTS, fonts: normalizeFonts(raw.fonts), ai: { ...DEFAULTS.ai } };
     value.ai.reasoningEffort = raw.ai?.reasoningEffort === "none" ? "none" : raw.ai?.reasoningEffort === "auto" ? "auto" : "low";
@@ -360,7 +360,7 @@
       const number = raw.ai?.[key];
       if (typeof number === "number" && Number.isFinite(number)) value.ai[key] = Math.max(key === "requestsPerMinute" ? 1 : 0, Math.min(1e6, Math.round(number)));
     }
-    for (const key of ["enabled", "title", "body", "comment", "translationOnly", "vocabulary", "xCollapseSidebar", "xHideFloatingIcons", "xHideRightSidebar", "xHideAds"]) if (typeof raw[key] === "boolean") value[key] = raw[key];
+    for (const key of ["enabled", "title", "body", "comment", "translationOnly", "xCollapseSidebar", "xHideFloatingIcons", "xHideRightSidebar", "xHideAds"]) if (typeof raw[key] === "boolean") value[key] = raw[key];
     for (const key of ["before", "after"]) {
       const number = raw[key];
       if (typeof number === "number" && Number.isFinite(number)) value[key] = Math.min(5e3, Math.max(0, Math.round(number)));
@@ -1717,13 +1717,11 @@
   var TranslationTaskManager = class {
     #maxConcurrent;
     #maxPrefetchConcurrent;
-    #maxVocabularyConcurrent;
     #quota;
     #queue = [];
     #entries = /* @__PURE__ */ new Map();
     #activeCount = 0;
     #activePrefetchCount = 0;
-    #activeVocabularyCount = 0;
     #sequence = 0;
     #destroyed = false;
     #wake;
@@ -1749,7 +1747,6 @@
         throw new RangeError("maxConcurrent must be a positive integer");
       }
       this.#maxPrefetchConcurrent = this.#maxConcurrent === 1 ? 1 : Math.max(1, Math.min(options.maxPrefetchConcurrent ?? TRANSLATION_MAX_PREFETCH_CONCURRENT, this.#maxConcurrent - 1));
-      this.#maxVocabularyConcurrent = Math.max(1, Math.min(options.maxVocabularyConcurrent ?? this.#maxConcurrent, this.#maxConcurrent));
       this.#quota = new TranslationQuotaGate(options.now, options.delay);
     }
     request(options, operation) {
@@ -1775,7 +1772,7 @@
         estimatedTokens: Math.max(1, options.estimatedTokens ?? 1),
         priority: options.priority,
         sequence: this.#sequence,
-        queued: measureRequest("queue", { priority: options.priority, category: key.startsWith("vocabulary:") ? "vocabulary" : "translation" }),
+        queued: measureRequest("queue", { priority: options.priority, category: "translation" }),
         controller: new AbortController(),
         operation,
         promise,
@@ -1882,9 +1879,6 @@
         this.#sortQueue();
         let wait = Infinity;
         const nextIndex = this.#queue.findIndex((entry2) => {
-          if (this.#preparing > 0 && entry2.key.startsWith("vocabulary:")) return false;
-          if (entry2.priority === "prefetch" && entry2.key.startsWith("vocabulary:") && [...this.#entries.values()].some((active) => active.started && !active.settled && active.countedAsPrefetch && active.key.startsWith("vocabulary:"))) return false;
-          if (entry2.key.startsWith("vocabulary:") && this.#activeVocabularyCount >= this.#maxVocabularyConcurrent) return false;
           if (entry2.priority === "prefetch" && (this.#preparing > 0 || this.#activePrefetchCount >= this.#maxPrefetchConcurrent)) return false;
           const delay = this.#quota.tryAcquire(entry2.serviceKey, entry2.quota, entry2.estimatedTokens, entry2.priority);
           if (!delay) return true;
@@ -1908,7 +1902,6 @@
         entry.countedAsPrefetch = entry.priority === "prefetch";
         this.#activeCount += 1;
         if (entry.countedAsPrefetch) this.#activePrefetchCount += 1;
-        if (entry.key.startsWith("vocabulary:")) this.#activeVocabularyCount += 1;
         void this.#execute(entry);
       }
     }
@@ -1925,7 +1918,6 @@
       } finally {
         this.#activeCount = Math.max(0, this.#activeCount - 1);
         if (entry.countedAsPrefetch) this.#activePrefetchCount = Math.max(0, this.#activePrefetchCount - 1);
-        if (entry.key.startsWith("vocabulary:")) this.#activeVocabularyCount = Math.max(0, this.#activeVocabularyCount - 1);
         entry.countedAsPrefetch = false;
         this.#drain();
       }
@@ -2323,7 +2315,7 @@
     return chunks;
   }
   var TranslationWorkerController = class extends ScrollIdleQueue {
-    tasks = new TranslationTaskManager({ maxConcurrent: 6, maxPrefetchConcurrent: 2, maxVocabularyConcurrent: 2 });
+    tasks = new TranslationTaskManager({ maxConcurrent: 6, maxPrefetchConcurrent: 2 });
     batcher;
     constructor(ai) {
       super();
@@ -2731,8 +2723,6 @@
     }
     remove(entry) {
       this.detached.delete(entry);
-      entry.learning?.();
-      entry.learning = null;
       this.cancel(entry);
       entry.originals.restore();
       for (const item of entry.inlineBoxes) item.remove();
@@ -2829,7 +2819,6 @@
             completed: /* @__PURE__ */ new Map(),
             inlineBoxes: [],
             originals: new OriginalVisibility(),
-            learning: null,
             signature,
             sourceSignature: signature,
             identity,
@@ -3148,7 +3137,6 @@
       window.removeEventListener("popstate", this.onRoute);
       for (const entry of this.entries.values()) {
         this.cancel(entry);
-        entry.learning?.();
         entry.originals.restore();
         for (const item of entry.inlineBoxes) item.remove();
         entry.box?.remove();
