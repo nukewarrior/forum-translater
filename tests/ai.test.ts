@@ -84,7 +84,7 @@ it.each([
 it.each([
   ['onprogress', '"尚未完成'], ['onload', '"尚未完成'],
   ['onprogress', '"缺少保护标记"'], ['onload', '"缺少保护标记"'],
-] as const)('preserves only valid completed text before a same-block failure through %s (%s)', async (callback, unfinished) => {
+] as const)('rejects partial stream failures without automatic retry through %s (%s)', async (callback, unfinished) => {
   vi.useFakeTimers();
   const tasks = new TranslationTaskManager({ maxConcurrent: 4 });
   const batcher = new AiBatcher(ai, tasks);
@@ -107,14 +107,14 @@ it.each([
   const signal = new AbortController().signal;
   const first = batcher.request('first', { text: 'First ⟦0⟧' }, 'visible', signal, vi.fn());
   const second = batcher.request('second', { text: 'Second ⟦1⟧' }, 'visible', signal, vi.fn());
-  const firstResolved = vi.fn(); void first.then(firstResolved);
+  const results = Promise.allSettled([first, second]);
   await vi.advanceTimersByTimeAsync(25);
-  expect(firstResolved).not.toHaveBeenCalled();
-  expect(request).toHaveBeenCalledOnce();
-  await vi.advanceTimersByTimeAsync(1000);
-  expect(await Promise.all([first, second])).toEqual(['第一段 ⟦0⟧', '第二段 ⟦1⟧']);
-  expect(request).toHaveBeenCalledTimes(2);
-  expect(sent).toEqual([['First ⟦0⟧', 'Second ⟦1⟧'], ['First ⟦0⟧', 'Second ⟦1⟧']]);
+  for (const result of await results) {
+    expect(result).toMatchObject({ status: 'rejected', reason: { name: 'PartialTranslationError' } });
+  }
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(sent).toEqual([['First ⟦0⟧', 'Second ⟦1⟧']]);
   batcher.destroy(); tasks.destroy();
 });
 it('passes selected effort and fast tier to the transport', async () => {
@@ -266,8 +266,8 @@ it('reads GM response streams through natural EOF without cancelling the reader'
   const resolved = vi.fn(); void promise.then(resolved);
   expect(options?.responseType).toBe('stream');
   let controller!: ReadableStreamDefaultController<Uint8Array>;
-  const stream = new ReadableStream<Uint8Array>({ start(value) { controller = value; } });
-  const cancel = vi.spyOn(stream, 'cancel');
+  const cancel = vi.fn();
+  const stream = new ReadableStream<Uint8Array>({ start(value) { controller = value; }, cancel });
   options?.onloadstart?.({ status: 200, responseText: '', response: stream });
   controller.enqueue(new TextEncoder().encode(body));
   await Promise.resolve(); await Promise.resolve();
