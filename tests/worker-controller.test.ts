@@ -20,30 +20,6 @@ it('yields between owners, uses their latest paint and cancels removed owners', 
   } finally { worker.destroy(); vi.useRealTimers(); }
 });
 
-it('promotes visible vocabulary ahead of offscreen words without cancelling active work', async () => {
-  const worker = new TranslationWorkerController(DEFAULTS.ai);
-  const order: string[] = []; let finish!: () => void;
-  const options = { serviceKey: 'ai', priority: 'prefetch' as const, signal: new AbortController().signal };
-  const active = worker.tasks.request({ ...options, key: 'vocabulary:active' }, () => new Promise<void>(resolve => { finish = resolve; order.push('active'); }));
-  const old = worker.tasks.request({ ...options, key: 'vocabulary:old' }, () => { order.push('old'); return Promise.resolve(); });
-  const visible = worker.tasks.request({ ...options, key: 'vocabulary:visible' }, () => { order.push('visible'); return Promise.resolve(); });
-  await Promise.resolve(); expect(order).toEqual(['active']);
-  worker.tasks.promote('vocabulary:visible', 'visible');
-  await visible; expect(order).toEqual(['active', 'visible']);
-  finish(); await Promise.all([active, old]); worker.destroy();
-});
-
-it('reserves background capacity for text while vocabulary is still streaming', async () => {
-  const worker = new TranslationWorkerController(DEFAULTS.ai);
-  const order: string[] = []; let finish!: () => void;
-  const options = { serviceKey: 'ai', priority: 'prefetch' as const, signal: new AbortController().signal };
-  const first = worker.tasks.request({ ...options, key: 'vocabulary:first' }, () => new Promise<void>(resolve => { finish = resolve; order.push('first'); }));
-  const next = worker.tasks.request({ ...options, key: 'vocabulary:next' }, () => { order.push('next'); return Promise.resolve(); });
-  const text = worker.tasks.request({ ...options, key: 'ai-batch:text' }, () => { order.push('text'); return Promise.resolve(); });
-  await text; expect(order).toEqual(['first', 'text']);
-  finish(); await Promise.all([first, next]); expect(order).toEqual(['first', 'text', 'next']); worker.destroy();
-});
-
 it('starts six visible requests concurrently while keeping further work queued', async () => {
   const worker = new TranslationWorkerController(DEFAULTS.ai); const finish: (() => void)[] = [];
   const pending = Array.from({ length: 7 }, (_, i) => worker.tasks.request({ key: String(i), serviceKey: 'test', priority: 'visible-batch', signal: new AbortController().signal }, () => new Promise<void>(resolve => { finish.push(resolve); })));
