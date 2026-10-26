@@ -113,13 +113,11 @@ class TranslationQuotaGate {
 export class TranslationTaskManager {
   readonly #maxConcurrent: number;
   readonly #maxPrefetchConcurrent: number;
-  readonly #maxVocabularyConcurrent: number;
   readonly #quota: TranslationQuotaGate;
   readonly #queue: Array<TranslationQueueEntry<unknown>> = [];
   readonly #entries = new Map<string, TranslationQueueEntry<unknown>>();
   #activeCount = 0;
   #activePrefetchCount = 0;
-  #activeVocabularyCount = 0;
   #sequence = 0;
   #destroyed = false;
   #wake: AbortController | undefined;
@@ -143,7 +141,6 @@ export class TranslationTaskManager {
   constructor(options: {
     readonly maxConcurrent?: number;
     readonly maxPrefetchConcurrent?: number;
-    readonly maxVocabularyConcurrent?: number;
     readonly now?: () => number;
     readonly delay?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
   } = {}) {
@@ -154,7 +151,6 @@ export class TranslationTaskManager {
     this.#maxPrefetchConcurrent = this.#maxConcurrent === 1
       ? 1
       : Math.max(1, Math.min(options.maxPrefetchConcurrent ?? TRANSLATION_MAX_PREFETCH_CONCURRENT, this.#maxConcurrent - 1));
-    this.#maxVocabularyConcurrent = Math.max(1, Math.min(options.maxVocabularyConcurrent ?? this.#maxConcurrent, this.#maxConcurrent));
     this.#quota = new TranslationQuotaGate(options.now, options.delay);
   }
 
@@ -183,7 +179,7 @@ export class TranslationTaskManager {
       estimatedTokens: Math.max(1, options.estimatedTokens ?? 1),
       priority: options.priority,
       sequence: this.#sequence,
-      queued: measureRequest('queue', { priority: options.priority, category: key.startsWith('vocabulary:') ? 'vocabulary' : 'translation' }),
+      queued: measureRequest('queue', { priority: options.priority, category: 'translation' }),
       controller: new AbortController(),
       operation,
       promise,
@@ -293,9 +289,6 @@ export class TranslationTaskManager {
       this.#sortQueue();
       let wait = Infinity;
       const nextIndex = this.#queue.findIndex((entry) => {
-        if (this.#preparing > 0 && entry.key.startsWith('vocabulary:')) return false;
-        if (entry.priority === 'prefetch' && entry.key.startsWith('vocabulary:') && [...this.#entries.values()].some(active => active.started && !active.settled && active.countedAsPrefetch && active.key.startsWith('vocabulary:'))) return false;
-        if (entry.key.startsWith('vocabulary:') && this.#activeVocabularyCount >= this.#maxVocabularyConcurrent) return false;
         if (entry.priority === "prefetch" && (this.#preparing > 0 || this.#activePrefetchCount >= this.#maxPrefetchConcurrent)) return false;
         const delay = this.#quota.tryAcquire(entry.serviceKey, entry.quota, entry.estimatedTokens, entry.priority);
         if (!delay) return true;
@@ -315,7 +308,6 @@ export class TranslationTaskManager {
       entry.countedAsPrefetch = entry.priority === "prefetch";
       this.#activeCount += 1;
       if (entry.countedAsPrefetch) this.#activePrefetchCount += 1;
-      if (entry.key.startsWith('vocabulary:')) this.#activeVocabularyCount += 1;
       void this.#execute(entry);
     }
   }
@@ -333,7 +325,6 @@ export class TranslationTaskManager {
     } finally {
       this.#activeCount = Math.max(0, this.#activeCount - 1);
       if (entry.countedAsPrefetch) this.#activePrefetchCount = Math.max(0, this.#activePrefetchCount - 1);
-      if (entry.key.startsWith('vocabulary:')) this.#activeVocabularyCount = Math.max(0, this.#activeVocabularyCount - 1);
       entry.countedAsPrefetch = false;
       this.#drain();
     }
