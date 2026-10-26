@@ -1513,6 +1513,7 @@
       }, 6e4);
       let streamStarted = false;
       let streamFinished = false;
+      let streamedResponseText = "";
       const consumeStream = async (response) => {
         const candidate = response.response;
         if (settled || streamStarted || !candidate || typeof candidate !== "object" || !("getReader" in candidate) || typeof candidate.getReader !== "function") return;
@@ -1521,17 +1522,14 @@
         const decoder = new TextDecoder();
         let body = "";
         try {
-          while (!settled) {
+          for (; ; ) {
             const chunk = await reader.read();
             if (chunk.done) break;
             body += decoder.decode(chunk.value, { stream: true });
             metric.milestone("first-byte");
-            options.onprogress?.({ ...response, status: response.status || 200, responseText: body });
+            if (!settled) options.onprogress?.({ ...response, status: response.status || 200, responseText: body });
           }
-          if (settled) {
-            await reader.cancel();
-            return;
-          }
+          if (settled) return;
           body += decoder.decode();
           streamFinished = true;
           options.onload?.({ ...response, status: response.status || 200, responseText: body, response: void 0 });
@@ -1555,6 +1553,9 @@
         data: JSON.stringify(aiRequestBody(ai, sections, !nonStream)),
         onprogress: (response) => {
           if (response.responseText) metric.milestone("first-byte");
+          if (response.responseText && response.responseText.length >= streamedResponseText.length) {
+            streamedResponseText = response.responseText;
+          }
           if (settled || response.status !== 200 || !/^\s*(?:event:|data:|:)/.test(response.responseText)) return;
           try {
             const raw = stream.push(response.responseText);
@@ -1575,14 +1576,15 @@
           }
         },
         onload: (response) => {
-          if (response.response && typeof response.response === "object" && "getReader" in response.response) {
+          if (streamStarted && !streamFinished && !stream.done) return;
+          if (!streamStarted && response.response && typeof response.response === "object" && "getReader" in response.response) {
             void consumeStream(response);
             return;
           }
-          if (streamStarted && !streamFinished) return;
+          const responseText = response.responseText || streamedResponseText;
           finish(() => {
             try {
-              const payload = JSON.parse(response.responseText);
+              const payload = JSON.parse(responseText);
               if (payload.error?.type === "usage_limit_reached" || payload.error?.code === "usage_limit_reached") {
                 reject(new Error("当前模型额度已用尽（usage_limit_reached），请切换可用模型或等待额度恢复"));
                 return;
@@ -1590,7 +1592,7 @@
             } catch {
             }
             if (response.status < 200 || response.status >= 300) {
-              const text = response.responseText.toLowerCase();
+              const text = responseText.toLowerCase();
               if (!nonStream && !stream.content && [400, 422].includes(response.status) && /(?:stream|streaming)/.test(text) && /(?:unsupported|not support|not supported|不支持|invalid|disabled)/.test(text)) {
                 void translateAiBatch(sections, ai, signal, onPartial, true).then(resolve, reject);
                 return;
@@ -1599,10 +1601,10 @@
               return;
             }
             try {
-              const isStream = /^\s*(?:event:|data:|:)/.test(response.responseText);
-              const raw = isStream ? stream.push(response.responseText, true) : ai.protocol === "chat-completions" ? decodeChatCompletion(response.responseText) : decodeResponse(response.responseText);
+              const isStream = /^\s*(?:event:|data:|:)/.test(responseText) || stream.done;
+              const raw = isStream ? stream.push(responseText, true) : ai.protocol === "chat-completions" ? decodeChatCompletion(responseText) : decodeResponse(responseText);
               if (isStream && !stream.done) throw new Error("AI 响应未完整结束");
-              if (!isStream) metric.usage(JSON.parse(response.responseText).usage);
+              if (!isStream) metric.usage(JSON.parse(responseText).usage);
               const values = decodeValues(raw);
               metric.content();
               metric.finish(true);
