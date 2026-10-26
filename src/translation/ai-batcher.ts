@@ -113,7 +113,8 @@ export class AiBatcher {
           // Explicit terminal errors (quota/permission) retain their original
           // error type and message.
           if (hasVisibleOutput && retryableTranslationError(error)) {
-            const failure = new Error('AI 已输出部分译文，但请求未正常结束；可能已产生费用，请手动重试');
+            const reason = error instanceof Error ? error.message : '连接中断';
+            const failure = new Error(`AI 已输出部分译文，但请求未正常结束（${reason}）；可能已产生费用，请手动重试`);
             failure.name = 'PartialTranslationError';
             throw failure;
           }
