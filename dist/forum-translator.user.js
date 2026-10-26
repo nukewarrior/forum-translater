@@ -864,7 +864,7 @@
 
   // src/translation/retry.ts
   function retryableTranslationError(error) {
-    if (!(error instanceof Error) || error.name === "AbortError") return false;
+    if (!(error instanceof Error) || (error.name === "AbortError" || error.name === "PartialTranslationError")) return false;
     if (/usage_limit_reached/.test(error.message)) return false;
     if (/HTTP\s+(?:401|403|400|404|422)\b/.test(error.message) || /配置|API Key|启动失败/.test(error.message)) return false;
     return /网络|超时|超过 60 秒|流读取|响应|格式|占位符|标记|HTTP\s+(?:408|429|5\d\d)\b/.test(error.message);
@@ -1995,12 +1995,14 @@
         const batch = { key: `ai-batch:${++this.sequence}`, controller: new AbortController(), jobs, attempt: 0 };
         for (const job of jobs) job.batch = batch;
         const unique = [...new Map(jobs.map((job) => [job.key, job])).values()];
+        let hasVisibleOutput = false;
         void withTranslationRetry(async () => {
           batch.attempt++;
           const remaining = unique.filter((item) => jobs.some((job) => job.key === item.key && !job.cancelled && !job.delivered));
           if (!remaining.length) return;
           const preview = (index, text, _complete) => {
             const key = remaining[index]?.key;
+            if (text.trim()) hasVisibleOutput = true;
             for (const job of jobs) if (job.key === key && !job.cancelled && !job.delivered && job.lastPreview !== text) {
               job.lastPreview = text;
               job.partial(text);
@@ -2021,6 +2023,11 @@
               }
             });
           } catch (error) {
+            if (hasVisibleOutput && retryableTranslationError(error)) {
+              const failure = new Error("AI 已输出部分译文，但请求未正常结束；可能已产生费用，请手动重试");
+              failure.name = "PartialTranslationError";
+              throw failure;
+            }
             if (jobs.some((job) => !job.cancelled && !job.delivered)) throw error;
           }
         }, batch.controller.signal).catch((error) => {
