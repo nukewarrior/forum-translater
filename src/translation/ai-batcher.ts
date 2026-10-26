@@ -5,7 +5,7 @@ import { TranslationTaskManager, type TranslationTaskPriority } from './translat
 interface Job extends AiSection {
   key: string; signal: AbortSignal; priority: TranslationTaskPriority;
   partial: (text: string) => void; resolve: (text: string) => void; reject: (error: unknown) => void;
-  cleanup: () => void; cancelled: boolean; delivered: boolean; batch?: { key: string; controller: AbortController; jobs: Job[]; attempt: number };
+  cleanup: () => void; cancelled: boolean; delivered: boolean; lastPreview?: string; batch?: { key: string; controller: AbortController; jobs: Job[]; attempt: number };
 }
 const rank = { 'visible-batch': -1, interactive: 0, visible: 1, prefetch: 2 };
 export class AiBatcher {
@@ -86,7 +86,9 @@ export class AiBatcher {
           const key = remaining[index]?.key;
           // Show validated text immediately, but do not resolve the paragraph:
           // a complete JSON section can precede a failed SSE or an HTTP abort.
-          for (const job of jobs) if (job.key === key && !job.cancelled && !job.delivered) job.partial(text);
+          for (const job of jobs) if (job.key === key && !job.cancelled && !job.delivered && job.lastPreview !== text) {
+            job.lastPreview = text; job.partial(text);
+          }
         };
         const characters = aiEntries(remaining).length;
         const priority = jobs.some(job => job.priority === 'visible' || job.priority === 'visible-batch') ? 'visible-batch' : jobs[0]?.priority ?? 'prefetch';
@@ -99,6 +101,7 @@ export class AiBatcher {
           values.forEach((value, index) => {
             const key = remaining[index]?.key;
             for (const job of jobs) if (job.key === key && !job.cancelled && !job.delivered) {
+              if (job.lastPreview !== value) job.partial(value);
               job.delivered = true; job.resolve(value);
             }
           });
