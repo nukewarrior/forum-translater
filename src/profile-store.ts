@@ -76,6 +76,15 @@ function readRaw(): StoredProfileCollection {
 function cleanupOldTranslationAndVocabularyData(): void {
   if (GM_getValue<boolean>(LEGACY_CLEANUP_MARKER, false)) return;
   try {
+    // Preserve global fonts, appearance and site switches, but discard the
+    // previous single-provider AI settings (including stale endpoint/model).
+    const legacy = GM_getValue<Record<string, unknown>>('ft:settings:v1', {});
+    if (legacy && typeof legacy === 'object' && !Array.isArray(legacy)) {
+      const { provider: _provider, ai: _ai, vocabulary: _vocabulary, ...global } = legacy;
+      if ('provider' in legacy || 'ai' in legacy || 'vocabulary' in legacy) {
+        GM_setValue('ft:settings:v1', global);
+      }
+    }
     GM_deleteValue('ft:ai-key:v1');
     for (const key of OLD_VOCABULARY_KEYS) GM_deleteValue(key);
     for (const key of GM_listValues()) {
