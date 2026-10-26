@@ -140,13 +140,74 @@ export function mountControls(read: () => Settings, save: (settings: Settings) =
     }
     panel.hidden = !open; host.hidden = !open;
     if (open) { if (!dialog.open) dialog.showModal(); panel.querySelector<HTMLButtonElement>('header button')?.focus(); } else { dialog.close(); panel.replaceChildren(); panel.onsubmit = null; profileMenu.refresh(); if (previousFocus?.isConnected) previousFocus.focus(); }
+    homeShortcut?.refresh();
   }
   dialog.addEventListener('cancel', event => { event.preventDefault(); setOpen(false); });
   shadow.addEventListener('keydown', event => { if ((event as KeyboardEvent).key === 'Escape' && !panel.hidden) setOpen(false); });
   const profileMenu = mountProfileMenu(() => { onProfileChanged?.(); if (!panel.hidden) render(); });
+  // On Reddit's root feed, show a lightweight entry to the existing settings dialog.
+  const homeShortcut = !isXSite() ? mountRedditHomeSettingsShortcut(
+    () => setOpen(true), () => dialog.open,
+  ) : undefined;
   const menu = GM_registerMenuCommand(`${isXSite() ? 'X' : 'Reddit'} 翻译设置`, () => setOpen(true));
   const metricsMenu = GM_registerMenuCommand('翻译性能统计（当前页面）', () => { alert(JSON.stringify(readTranslationMetrics(), null, 2)); });
   // Guard helps hot-reload owners distinguish this surface from host DOM.
   if (!host.matches(OWNED)) throw new Error('Missing UI ownership');
-  return () => { fontControls?.destroy(); disposeProfiles?.(); profileMenu.destroy(); if (dialog.open) dialog.close(); GM_unregisterMenuCommand(menu); GM_unregisterMenuCommand(metricsMenu); host.remove(); };
+  return () => { fontControls?.destroy(); disposeProfiles?.(); profileMenu.destroy(); if (dialog.open) dialog.close(); GM_unregisterMenuCommand(menu); GM_unregisterMenuCommand(metricsMenu); homeShortcut?.destroy(); host.remove(); };
+}
+
+/** Home-only settings shortcut, using the same dialog as the Tampermonkey menu. */
+function mountRedditHomeSettingsShortcut(
+  openSettings: () => void,
+  isDialogOpen: () => boolean,
+): { refresh(): void; destroy(): void } {
+  const host = document.createElement('div');
+  host.dataset.ftOwned = 'reddit-home-settings';
+  const shadow = host.attachShadow({ mode: 'open' });
+  const style = document.createElement('style');
+  style.textContent = [
+    ':host{all:initial}',
+    'button{position:fixed;right:20px;bottom:22px;z-index:2147483000;display:flex;align-items:center;gap:7px;',
+    'padding:10px 14px;border:1px solid #d9deea;border-radius:999px;background:#fff;color:#293751;',
+    'box-shadow:0 5px 20px #182b4930;font:600 12px/1.35 system-ui,-apple-system,sans-serif;cursor:pointer}',
+    'button:hover{background:#f0f2ff;border-color:#8e98d9}',
+    'button:focus-visible{outline:2px solid #4758d6;outline-offset:3px}',
+    'button[hidden]{display:none!important}',
+    '@media(max-width:680px){button{right:14px;bottom:16px;padding:9px 12px}}',
+  ].join('');
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.setAttribute('aria-label', '打开 Reddit 翻译设置');
+  button.title = '论坛译读 · 翻译设置';
+  button.textContent = '译 · 翻译设置';
+  button.onclick = openSettings;
+  shadow.append(style, button);
+  document.body.append(host);
+
+  let previousRoute = '';
+  const update = (): void => {
+    previousRoute = location.href;
+    button.hidden = !/(^|\.)reddit\.com$/.test(location.hostname)
+      || location.pathname !== '/' || isDialogOpen();
+  };
+  // Reddit may use history.pushState without firing popstate. This observer
+  // only detects URL changes; it does not scan or mutate feed content.
+  const observer = new MutationObserver(() => {
+    if (location.href !== previousRoute) update();
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+  window.addEventListener('popstate', update);
+  window.addEventListener('hashchange', update);
+  window.addEventListener('pageshow', update);
+  update();
+  return {
+    refresh: update,
+    destroy: () => {
+      observer.disconnect();
+      window.removeEventListener('popstate', update);
+      window.removeEventListener('hashchange', update);
+      window.removeEventListener('pageshow', update);
+      host.remove();
+    },
+  };
 }
