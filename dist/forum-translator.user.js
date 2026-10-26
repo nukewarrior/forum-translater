@@ -1495,10 +1495,13 @@
       const metric = measureRequest("translation", { sections: sections.length, model: ai.model, effort: ai.reasoningEffort ?? "low", fast: ai.fastMode === true });
       markContent = () => metric.content();
       const stream = ai.protocol === "chat-completions" ? new ChatCompletionStreamDecoder(() => metric.milestone("first-output-delta"), (usage) => metric.usage(usage)) : new ResponseStreamDecoder(() => metric.milestone("first-output-delta"), (usage) => metric.usage(usage));
+      let terminalTimer;
+      let watchdog;
       const finish = (action) => {
         if (settled) return;
         settled = true;
         clearTimeout(watchdog);
+        clearTimeout(terminalTimer);
         signal.removeEventListener("abort", abort);
         action();
         metric.finish(false);
@@ -1507,10 +1510,14 @@
         finish(() => reject(new DOMException("已取消", "AbortError")));
         handle?.abort();
       };
-      const watchdog = setTimeout(() => {
-        finish(() => reject(new Error("AI 翻译超过 60 秒，请重试或切换模型")));
-        handle?.abort();
-      }, 6e4);
+      const resetIdleTimeout = () => {
+        clearTimeout(watchdog);
+        watchdog = setTimeout(() => {
+          finish(() => reject(new Error("AI 翻译超过 60 秒没有产生新内容，已终止请求")));
+          handle?.abort();
+        }, 6e4);
+      };
+      resetIdleTimeout();
       let streamStarted = false;
       let streamFinished = false;
       let streamedResponseText = "";
@@ -1548,7 +1555,7 @@
         method: "POST",
         url: aiEndpoint(ai),
         anonymous: true,
-        timeout: 6e4,
+        timeout: 3e5,
         headers: { ...ai.apiKey.trim() ? { Authorization: `Bearer ${ai.apiKey.trim()}` } : {}, "Content-Type": "application/json", Accept: "text/event-stream, application/json" },
         data: JSON.stringify(aiRequestBody(ai, sections, !nonStream)),
         onprogress: (response) => {
@@ -1558,7 +1565,18 @@
           }
           if (settled || response.status !== 200 || !/^\s*(?:event:|data:|:)/.test(response.responseText)) return;
           try {
+            const before = stream.content.length;
             const raw = stream.push(response.responseText);
+            if (stream.content.length > before) resetIdleTimeout();
+            if (stream.done && terminalTimer === void 0) {
+              const values = decodeValues(raw);
+              clearTimeout(watchdog);
+              terminalTimer = setTimeout(() => {
+                if (settled) return;
+                metric.finish(true);
+                finish(() => resolve(values));
+              }, 1500);
+            }
             if (entries.some((_entry, index) => !published.get(index)?.complete)) {
               const partials = streamedJsonRecord(raw);
               entries.forEach((entry, index) => {
