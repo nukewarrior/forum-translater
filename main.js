@@ -1553,13 +1553,6 @@
           if (settled || response.status !== 200 || !/^\s*(?:event:|data:|:)/.test(response.responseText)) return;
           try {
             const raw = stream.push(response.responseText);
-            if (stream.done) {
-              const values2 = decodeValues(raw);
-              metric.finish(true);
-              finish(() => resolve(values2));
-              handle?.abort();
-              return;
-            }
             if (entries.some((_entry, index) => !published.get(index)?.complete)) {
               const partials = streamedJsonRecord(raw);
               entries.forEach((entry, index) => {
@@ -1570,18 +1563,6 @@
                 publishTranslation(index, partial, complete2);
               });
             }
-            const ending = raw.trimEnd();
-            if (!ending.endsWith("}") && !ending.endsWith("```")) return;
-            let values;
-            try {
-              values = decodeValues(raw);
-            } catch {
-              return;
-            }
-            stream.push(response.responseText, true);
-            metric.finish(true);
-            finish(() => resolve(values));
-            handle?.abort();
           } catch (error) {
             preserveCompletedTranslations(stream.content);
             finish(() => reject(error instanceof Error && !(error instanceof SyntaxError) ? error : new Error("AI 流式 JSON 无法解析")));
@@ -2018,23 +1999,27 @@
           batch.attempt++;
           const remaining = unique.filter((item) => jobs.some((job) => job.key === item.key && !job.cancelled && !job.delivered));
           if (!remaining.length) return;
-          const deliver = (index, text, complete2) => {
+          const preview = (index, text, _complete) => {
             const key = remaining[index]?.key;
-            for (const job of jobs) if (job.key === key && !job.cancelled && !job.delivered) {
+            for (const job of jobs) if (job.key === key && !job.cancelled && !job.delivered && job.lastPreview !== text) {
+              job.lastPreview = text;
               job.partial(text);
-              if (complete2) {
-                job.delivered = true;
-                job.resolve(text);
-              }
             }
           };
           const characters = aiEntries(remaining).length;
           const priority = jobs.some((job) => job.priority === "visible" || job.priority === "visible-batch") ? "visible-batch" : jobs[0]?.priority ?? "prefetch";
-          const request = this.tasks.request({ key: batch.key, serviceKey: `ai:${normalizeAiBaseUrl(this.ai.baseUrl)}:${this.ai.model}`, priority, signal: batch.controller.signal, quota: this.ai, estimatedTokens: Math.ceil((characters + this.ai.prompt.length + 400) * 1.5) }, (signal) => translateAiBatch(remaining, this.ai, signal, deliver));
+          const request = this.tasks.request({ key: batch.key, serviceKey: `ai:${normalizeAiBaseUrl(this.ai.baseUrl)}:${this.ai.model}`, priority, signal: batch.controller.signal, quota: this.ai, estimatedTokens: Math.ceil((characters + this.ai.prompt.length + 400) * 1.5) }, (signal) => translateAiBatch(remaining, this.ai, signal, preview));
           this.setForeground(this.foregroundKeys);
           try {
             const values = await request;
-            values.forEach((value, index) => deliver(index, value, true));
+            values.forEach((value, index) => {
+              const key = remaining[index]?.key;
+              for (const job of jobs) if (job.key === key && !job.cancelled && !job.delivered) {
+                if (job.lastPreview !== value) job.partial(value);
+                job.delivered = true;
+                job.resolve(value);
+              }
+            });
           } catch (error) {
             if (jobs.some((job) => !job.cancelled && !job.delivered)) throw error;
           }
