@@ -77,7 +77,10 @@ describe('translation gateway and cache', () => {
     const replay = vi.fn(); const returned = service.section('Hello world', 'new-view', 'visible', new AbortController().signal, replay);
     await vi.waitFor(() => expect(replay).toHaveBeenCalledWith('你好世界'));
     expect(request).toHaveBeenCalledOnce();
-    now = 10000; body += event('"}'); options?.onprogress?.({ status: 200, responseText: body });
+    now = 10000; body += event('"}');
+    options?.onprogress?.({ status: 200, responseText: body });
+    body += `data: ${JSON.stringify({ type: 'response.completed' })}\n\n`;
+    options?.onload?.({ status: 200, responseText: body });
     await expect(returned).resolves.toBe('你好世界');
     expect(readTranslationMetrics().samples.filter(sample => sample.kind === 'section').slice(-2).map(sample => sample.firstContentMs)).toEqual([600, 0]);
   });
