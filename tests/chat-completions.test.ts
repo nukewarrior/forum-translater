@@ -30,6 +30,32 @@ it('decodes fragmented SSE without rendering reasoning tokens', () => {
   const bad = new ChatCompletionStreamDecoder();
   expect(() => bad.push(chunk({ choices: [{ delta: {}, finish_reason: 'length' }] }), true)).toThrow('长度限制');
 });
+it('accepts a naturally closed Chat stream with finish_reason stop and no [DONE]', async () => {
+  const abort = vi.fn();
+  const sse = chunk({ choices: [{ delta: { content: '{"section_0":"你好"}' } }] })
+    + chunk({ choices: [{ delta: {}, finish_reason: 'stop' }] })
+    + chunk({ usage: { total_tokens: 15 }, choices: [] });
+  vi.stubGlobal('GM_xmlhttpRequest', (options: GmRequestOptions) => {
+    queueMicrotask(() => {
+      options.onprogress?.({ status: 200, responseText: sse });
+      options.onload?.({ status: 200, responseText: sse });
+    });
+    return { abort };
+  });
+  await expect(translateAi('Hello', ai, new AbortController().signal)).resolves.toBe('你好');
+  expect(abort).not.toHaveBeenCalled();
+});
+
+it('still rejects a naturally ended Chat stream with no stop signal and incomplete JSON', async () => {
+  const body = chunk({ choices: [{ delta: { content: '{"section_0":"你' } }] });
+  vi.stubGlobal('GM_xmlhttpRequest', (options: GmRequestOptions) => {
+    queueMicrotask(() => options.onload?.({ status: 200, responseText: body }));
+    return { abort: vi.fn() };
+  });
+  await expect(translateAi('Hello', ai, new AbortController().signal))
+    .rejects.toThrow('未完整结束');
+});
+
 it('rejects truncated non-stream content and accepts a complete choice', () => {
   expect(decodeChatCompletion(completed('{"section_0":"你好"}'))).toBe('{"section_0":"你好"}');
   expect(() => decodeChatCompletion(JSON.stringify({ choices: [{ message: { content: 'x' }, finish_reason: 'length' }] }))).toThrow('长度限制');
