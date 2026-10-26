@@ -53,6 +53,44 @@ it('retains completed background translations during a swipe and fills them once
   expect(translate).toHaveBeenCalledOnce();
 });
 
+
+it('starts newly visible translation requests during ongoing touch scrolling, without painting mid-gesture', async () => {
+  const translate = vi.spyOn(service, 'section').mockResolvedValue('新译文');
+  runtime = new RedditRuntime(service.settings, service);
+  window.dispatchEvent(new TouchEvent('touchstart'));
+  Observer.instances[1]?.emit(title(), true);
+  await Promise.resolve();
+  expect(translate).toHaveBeenCalledOnce();
+  expect(translate.mock.calls[0]?.[2]).toBe('visible');
+  // Network work is allowed during scroll; DOM painting remains coalesced.
+  expect(document.querySelector('[data-ft-owned="translation"]')?.textContent).not.toContain('新译文');
+  window.dispatchEvent(new TouchEvent('touchend', { touches: [] }));
+  await settle();
+  expect(document.querySelector('[data-ft-owned="translation"]')?.textContent).toBe('新译文');
+});
+
+it('discovers Reddit comments appended during continuous scrolling rather than waiting for scroll idle', async () => {
+  const translate = vi.spyOn(service, 'section').mockResolvedValue('滚动中完成');
+  runtime = new RedditRuntime({ ...service.settings, title: false }, service);
+  window.dispatchEvent(new TouchEvent('touchstart'));
+  const node = document.createElement('shreddit-comment');
+  node.innerHTML = '<div slot="comment"><p>New visible Reddit comment.</p></div>';
+  const body = node.querySelector<HTMLElement>('[slot="comment"]');
+  if (!body) throw new Error('Missing test comment');
+  vi.spyOn(body, 'getBoundingClientRect').mockReturnValue({
+    x: 0, y: 30, top: 30, bottom: 80, left: 0, right: 300,
+    width: 300, height: 50, toJSON: () => ({}),
+  });
+  document.body.append(node);
+  await Promise.resolve();
+  await vi.advanceTimersByTimeAsync(18);
+  expect(translate).toHaveBeenCalledOnce();
+  expect(translate.mock.calls[0]?.[2]).toBe('visible');
+  window.dispatchEvent(new TouchEvent('touchend', { touches: [] }));
+  await settle();
+  expect(node.textContent).toContain('滚动中完成');
+});
+
 it.each([330, 1280])('returns from native Posts at %i px without cloning the retained feed or rescanning the document', async width => {
   const route = { hostname: 'x.com', href: 'https://x.com/home', pathname: '/home' };
   vi.stubGlobal('location', route); vi.stubGlobal('innerWidth', width);
