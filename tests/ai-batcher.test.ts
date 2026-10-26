@@ -5,7 +5,7 @@ import { DEFAULTS } from '../src/settings';
 import { translateAiBatch } from '../src/translation/ai';
 vi.mock('../src/translation/ai', async importOriginal => ({ ...await importOriginal<typeof import('../src/translation/ai')>(), translateAiBatch: vi.fn() }));
 afterEach(() => { vi.useRealTimers(); vi.resetAllMocks(); });
-it('launches text before queued vocabulary after batching, while both remain concurrent', async () => {
+it('launches text before queued prefetch after batching, while both remain concurrent', async () => {
   vi.useFakeTimers();
   const tasks = new TranslationTaskManager({ maxConcurrent: 2 });
   const batcher = new AiBatcher({ ...DEFAULTS.ai, baseUrl: 'https://example.com/v1', model: 'test' }, tasks);
@@ -13,9 +13,9 @@ it('launches text before queued vocabulary after batching, while both remain con
   vi.mocked(translateAiBatch).mockImplementation(() => { order.push('text'); return new Promise(resolve => { finish = resolve; }); });
   const signal = new AbortController().signal;
   const text = batcher.request('text', { text: 'Hello' }, 'visible', signal, vi.fn());
-  const words = tasks.request({ key: 'vocabulary:test', serviceKey: 'ai', priority: 'prefetch', signal }, () => { order.push('vocabulary'); return Promise.resolve(); });
+  const words = tasks.request({ key: 'prefetch:test', serviceKey: 'ai', priority: 'prefetch', signal }, () => { order.push('prefetch'); return Promise.resolve(); });
   await vi.advanceTimersByTimeAsync(24); expect(order).toEqual([]);
-  await vi.advanceTimersByTimeAsync(1); expect(order).toEqual(['text', 'vocabulary']);
+  await vi.advanceTimersByTimeAsync(1); expect(order).toEqual(['text', 'prefetch']);
   finish(['你好']); await Promise.all([text, words]); batcher.destroy(); tasks.destroy();
 });
 it('merges simultaneous paragraphs into one request, deduplicates identical text and streams to each owner', async () => {
