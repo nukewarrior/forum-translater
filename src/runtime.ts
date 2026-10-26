@@ -411,7 +411,9 @@ export class RedditRuntime {
         this.service.worker.render(entry.owner, render);
       } catch (error) {
         if (!current()) return;
-        let message = error instanceof Error ? `${error.name}: ${error.message}` : '未知错误';
+        let message = error instanceof Error
+          ? error.name === 'PartialTranslationError' ? error.message : `${error.name}: ${error.message}`
+          : '未知错误';
         if (this.settings.ai.apiKey) message = message.replaceAll(this.settings.ai.apiKey, '[已隐藏]');
         failureReasons.set(index, message.replace(/https?:\/\/\S+/g, '[服务地址]').slice(0, 180));
         streaming.delete(index); if (!previews.has(index)) translations.delete(index); failed.add(index); this.service.worker.render(entry.owner, render);
