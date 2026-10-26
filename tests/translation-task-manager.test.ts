@@ -202,6 +202,33 @@ describe("TranslationTaskManager", () => {
     manager.destroy();
   });
 
+  it('reserves half of a 30 RPM budget for visible comments after nearby prefetch consumes its allowance', async () => {
+    vi.useFakeTimers();
+    const manager = new TranslationTaskManager();
+    const quota = { requestsPerMinute: 30, tokensPerMinute: 0 };
+    const request = (key: string, priority: 'prefetch' | 'visible', signal: AbortSignal) =>
+      manager.request({ key, serviceKey: 'ai:reddit', priority, signal, quota },
+        () => Promise.resolve(key));
+    const backgroundSignal = new AbortController();
+    try {
+      for (let index = 0; index < 15; index++) {
+        await expect(request('prefetch-' + index, 'prefetch', backgroundSignal.signal))
+          .resolves.toBe('prefetch-' + index);
+      }
+      const blocked = request('prefetch-16', 'prefetch', backgroundSignal.signal);
+      const cancelled = expect(blocked).rejects.toMatchObject({ name: 'AbortError' });
+      await Promise.resolve();
+      expect(manager.snapshot().queued).toBe(1);
+      await expect(request('visible-comment', 'visible', new AbortController().signal))
+        .resolves.toBe('visible-comment');
+      expect(manager.snapshot().queued).toBe(1);
+      backgroundSignal.abort();
+      await cancelled;
+    } finally {
+      manager.destroy();
+      vi.useRealTimers();
+    }
+  });
   it("keeps low-quota prefetch runnable when RPM is one", async () => {
     const manager = new TranslationTaskManager();
     const result = await manager.request({
