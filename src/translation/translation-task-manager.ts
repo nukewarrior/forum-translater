@@ -86,8 +86,13 @@ class TranslationQuotaGate {
       const now = this.now();
       const records = (this.#records.get(serviceKey) ?? []).filter((record) => now - record.startedAt < 60_000);
       this.#records.set(serviceKey, records);
-      const requestLimit = rpm === 0 ? Number.POSITIVE_INFINITY : priority === "prefetch" ? Math.max(1, rpm - 1) : rpm;
-      const tokenLimit = tpm === 0 ? Number.POSITIVE_INFINITY : priority === "prefetch" ? Math.max(1, Math.floor(tpm * 0.8)) : tpm;
+      // Keep half the rolling window available to foreground requests.
+      // A one-slot reservation allowed long Reddit threads to burn almost
+      // every request on nearby comments before the reader scrolled to them.
+      const requestLimit = rpm === 0 ? Number.POSITIVE_INFINITY
+        : priority === "prefetch" ? Math.max(1, Math.floor(rpm * 0.5)) : rpm;
+      const tokenLimit = tpm === 0 ? Number.POSITIVE_INFINITY
+        : priority === "prefetch" ? Math.max(1, Math.floor(tpm * 0.5)) : tpm;
       const tokenCost = Math.max(1, Math.min(estimatedTokens, tokenLimit));
       const usedTokens = records.reduce((sum, record) => sum + record.tokens, 0);
       if (records.length < requestLimit && usedTokens + tokenCost <= tokenLimit) {
