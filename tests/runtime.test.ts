@@ -65,7 +65,7 @@ it('starts newly visible translation requests during ongoing touch scrolling, wi
   // Network work is allowed during scroll; DOM painting remains coalesced.
   expect(document.querySelector('[data-ft-owned="translation"]')?.textContent).not.toContain('新译文');
   window.dispatchEvent(new TouchEvent('touchend', { touches: [] }));
-  await settle();
+  await vi.advanceTimersByTimeAsync(170);
   expect(document.querySelector('[data-ft-owned="translation"]')?.textContent).toBe('新译文');
 });
 
@@ -87,7 +87,7 @@ it('discovers Reddit comments appended during continuous scrolling rather than w
   expect(translate).toHaveBeenCalledOnce();
   expect(translate.mock.calls[0]?.[2]).toBe('visible');
   window.dispatchEvent(new TouchEvent('touchend', { touches: [] }));
-  await settle();
+  await vi.advanceTimersByTimeAsync(170);
   expect(node.textContent).toContain('滚动中完成');
 });
 
