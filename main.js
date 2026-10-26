@@ -1667,8 +1667,8 @@
       const now = this.now();
       const records = (this.#records.get(serviceKey) ?? []).filter((record2) => now - record2.startedAt < 6e4);
       this.#records.set(serviceKey, records);
-      const requestLimit = rpm === 0 ? Number.POSITIVE_INFINITY : priority === "prefetch" ? Math.max(1, rpm - 1) : rpm;
-      const tokenLimit = tpm === 0 ? Number.POSITIVE_INFINITY : priority === "prefetch" ? Math.max(1, Math.floor(tpm * 0.8)) : tpm;
+      const requestLimit = rpm === 0 ? Number.POSITIVE_INFINITY : priority === "prefetch" ? Math.max(1, Math.floor(rpm * 0.5)) : rpm;
+      const tokenLimit = tpm === 0 ? Number.POSITIVE_INFINITY : priority === "prefetch" ? Math.max(1, Math.floor(tpm * 0.5)) : tpm;
       const tokenCost = Math.max(1, Math.min(estimatedTokens, tokenLimit));
       const usedTokens = records.reduce((sum, record2) => sum + record2.tokens, 0);
       if (records.length < requestLimit && usedTokens + tokenCost <= tokenLimit) {
@@ -2628,6 +2628,7 @@
     roots = /* @__PURE__ */ new Set();
     sequence = 0;
     destroyed = false;
+    reconcileTimer;
     route = location.href;
     translationOnly;
     tabTitle = new TabTitle();
@@ -2682,7 +2683,10 @@
       }
     };
     schedule() {
-      this.service.worker.render("reconcile", () => this.reconcile(), 16);
+      this.reconcileTimer ??= setTimeout(() => {
+        this.reconcileTimer = void 0;
+        this.reconcile();
+      }, 16);
     }
     updateForeground() {
       let first;
@@ -2830,6 +2834,11 @@
     }
     start(entry, manual = false) {
       if (this.destroyed || entry.state !== "idle" && !(manual && entry.state === "error")) return;
+      if (entry.visible || manual) {
+        this.service.worker.release(`start:${entry.owner}`);
+        queueMicrotask(() => this.begin(entry, manual));
+        return;
+      }
       this.service.worker.render(`start:${entry.owner}`, () => this.begin(entry, manual), 0);
     }
     begin(entry, manual = false) {
@@ -3093,6 +3102,8 @@
     }
     destroy() {
       this.destroyed = true;
+      clearTimeout(this.reconcileTimer);
+      this.reconcileTimer = void 0;
       this.tabTitle.destroy();
       this.feed.reset();
       this.mutations.disconnect();
