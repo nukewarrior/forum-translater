@@ -100,3 +100,50 @@ describe('translation profile settings', () => {
       .toContain('　Google 翻译 副本');
   });
 });
+
+describe('Reddit homepage settings access', () => {
+  it('opens the existing full settings dialog from reddit.com/ without Tampermonkey menu', async () => {
+    const route = { hostname: 'www.reddit.com', pathname: '/', href: 'https://www.reddit.com/' };
+    vi.stubGlobal('location', route);
+    destroy = mountControls(() => ({ ...DEFAULTS }), vi.fn(), vi.fn());
+    const host = document.querySelector<HTMLElement>('[data-ft-owned="reddit-home-settings"]');
+    const button = host?.shadowRoot?.querySelector<HTMLButtonElement>('button');
+    expect(button).toBeTruthy();
+    expect(button?.hidden).toBe(false);
+    button?.click();
+    const dialog = document.querySelector<HTMLElement>('[data-ft-owned="controls"]')?.shadowRoot?.querySelector('dialog');
+    expect(dialog?.open).toBe(true);
+    expect(dialog?.textContent).toContain('翻译配置');
+    expect(dialog?.textContent).toContain('我的 Profile');
+    expect(button?.hidden).toBe(true);
+    dialog?.querySelector<HTMLButtonElement>('header button')?.click();
+    expect(dialog?.open).toBe(false);
+    expect(button?.hidden).toBe(false);
+
+    // Navigation to a subreddit hides the entry even with no full reload.
+    route.pathname = '/r/selfhosted/';
+    route.href = 'https://www.reddit.com/r/selfhosted/';
+    document.body.append(document.createElement('span'));
+    await vi.waitFor(() => expect(button?.hidden).toBe(true));
+
+    route.pathname = '/';
+    route.href = 'https://www.reddit.com/';
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(button?.hidden).toBe(false);
+  });
+
+  it('does not show a Reddit homepage shortcut on X or subreddit routes', () => {
+    const route = { hostname: 'x.com', pathname: '/home', href: 'https://x.com/home' };
+    vi.stubGlobal('location', route);
+    destroy = mountControls(() => ({ ...DEFAULTS }), vi.fn(), vi.fn());
+    expect(document.querySelector('[data-ft-owned="reddit-home-settings"]')).toBeNull();
+    destroy();
+    destroy = undefined;
+    route.hostname = 'www.reddit.com';
+    route.pathname = '/r/test/';
+    route.href = 'https://www.reddit.com/r/test/';
+    destroy = mountControls(() => ({ ...DEFAULTS }), vi.fn(), vi.fn());
+    const button = document.querySelector<HTMLElement>('[data-ft-owned="reddit-home-settings"]')?.shadowRoot?.querySelector<HTMLButtonElement>('button');
+    expect(button?.hidden).toBe(true);
+  });
+});
