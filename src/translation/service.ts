@@ -136,7 +136,7 @@ export class TranslationService {
             inflight = { controller, promise }; this.aiInflight.set(key, inflight);
           } else {
             if (priority === 'visible' || priority === 'interactive') this.worker.batcher.promote(key, priority);
-            // A remounted view should not wait for the next token or vocabulary tail.
+            // A remounted view should not wait for the next token.
             if (inflight.partial !== undefined) listener(inflight.partial);
           }
           const translated = await new Promise<string>((resolve, reject) => {
