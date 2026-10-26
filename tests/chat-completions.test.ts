@@ -58,3 +58,42 @@ it('retries once without streaming only after an explicit unsupported-stream err
   expect(JSON.parse(String(transport.mock.calls[0]?.[0].data)).stream).toBe(true);
   expect(JSON.parse(String(transport.mock.calls[1]?.[0].data)).stream).toBe(false);
 });
+
+it('keeps a Chat Completions connection open through [DONE], trailing usage and HTTP EOF', async () => {
+  let options: GmRequestOptions | undefined;
+  const abort = vi.fn();
+  vi.stubGlobal('GM_xmlhttpRequest', (value: GmRequestOptions) => { options = value; return { abort }; });
+  const progress = vi.fn();
+  const promise = translateAi('Hello', ai, new AbortController().signal, progress);
+  const resolved = vi.fn();
+  void promise.then(resolved);
+
+  let responseText = chunk({ choices: [{ delta: { content: '{"section_0":"你好"}' } }] });
+  options?.onprogress?.({ status: 200, responseText });
+  expect(progress).toHaveBeenCalledWith('你好');
+  await Promise.resolve();
+  expect(resolved).not.toHaveBeenCalled();
+  expect(abort).not.toHaveBeenCalled();
+
+  responseText += 'data: [DONE]\n\n';
+  options?.onprogress?.({ status: 200, responseText });
+  await Promise.resolve();
+  expect(resolved).not.toHaveBeenCalled();
+  expect(abort).not.toHaveBeenCalled();
+
+  responseText += chunk({ usage: { prompt_tokens: 9, completion_tokens: 4, total_tokens: 13 }, choices: [] });
+  options?.onload?.({ status: 200, responseText });
+  expect(await promise).toBe('你好');
+  expect(abort).not.toHaveBeenCalled();
+});
+
+it('reports a provider terminal failure after full JSON instead of claiming success', async () => {
+  let options: GmRequestOptions | undefined;
+  const abort = vi.fn();
+  vi.stubGlobal('GM_xmlhttpRequest', (value: GmRequestOptions) => { options = value; return { abort }; });
+  const promise = translateAi('Hello', ai, new AbortController().signal);
+  options?.onprogress?.({ status: 200, responseText: chunk({ choices: [{ delta: { content: '{"section_0":"你好"}' } }] }) });
+  options?.onprogress?.({ status: 200, responseText: chunk({ choices: [{ delta: { content: '{"section_0":"你好"}' } }] }) + chunk({ choices: [{ delta: {}, finish_reason: 'length' }] }) });
+  await expect(promise).rejects.toThrow('长度限制');
+  expect(abort).toHaveBeenCalledOnce();
+});
