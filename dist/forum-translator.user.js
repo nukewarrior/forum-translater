@@ -246,6 +246,13 @@
   function cleanupOldTranslationAndVocabularyData() {
     if (GM_getValue(LEGACY_CLEANUP_MARKER, false)) return;
     try {
+      const legacy = GM_getValue("ft:settings:v1", {});
+      if (legacy && typeof legacy === "object" && !Array.isArray(legacy)) {
+        const { provider: _provider, ai: _ai, vocabulary: _vocabulary, ...global } = legacy;
+        if ("provider" in legacy || "ai" in legacy || "vocabulary" in legacy) {
+          GM_setValue("ft:settings:v1", global);
+        }
+      }
       GM_deleteValue("ft:ai-key:v1");
       for (const key of OLD_VOCABULARY_KEYS) GM_deleteValue(key);
       for (const key of GM_listValues()) {
