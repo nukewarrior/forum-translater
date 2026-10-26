@@ -34,6 +34,7 @@ export class RedditRuntime {
   private roots = new Set<ParentNode>();
   private sequence = 0;
   private destroyed = false;
+  private reconcileTimer: ReturnType<typeof setTimeout> | undefined;
   private route = location.href;
   private translationOnly: boolean;
   private tabTitle = new TabTitle();
@@ -114,7 +115,15 @@ export class RedditRuntime {
       if (!document.hidden) this.start(entry);
     }
   };
-  private schedule(): void { this.service.worker.render('reconcile', () => this.reconcile(), 16); }
+  private schedule(): void {
+    // Content discovery must not wait for scrolling to stop: Reddit virtualizes
+    // long comment threads and often mounts the next comments mid-scroll.
+    // One reconcile per frame coalesces bursts of DOM mutations.
+    this.reconcileTimer ??= setTimeout(() => {
+      this.reconcileTimer = undefined;
+      this.reconcile();
+    }, 16);
+  }
   private updateForeground(): void {
     // IntersectionObserver already supplies visibility. Reading rects while sorting
     // every visible post can force layout during a swipe, especially inside dialogs.
@@ -224,6 +233,14 @@ export class RedditRuntime {
   }
   private start(entry: Entry, manual = false): void {
     if (this.destroyed || entry.state !== 'idle' && !(manual && entry.state === 'error')) return;
+    if (entry.visible || manual) {
+      // Visible work is a network launch, not a DOM paint. Bypassing the
+      // scroll-idle paint queue removes the long delay during active scrolling.
+      this.service.worker.release(`start:${entry.owner}`);
+      queueMicrotask(() => this.begin(entry, manual));
+      return;
+    }
+    // Prefetch remains deferred during momentum scrolling to avoid extra work.
     this.service.worker.render(`start:${entry.owner}`, () => this.begin(entry, manual), 0);
   }
   private begin(entry: Entry, manual = false): void {
@@ -417,7 +434,7 @@ export class RedditRuntime {
   }
 
   destroy(): void {
-    this.destroyed = true; this.tabTitle.destroy(); this.feed.reset(); this.mutations.disconnect(); this.nearObserver.disconnect(); this.visibleObserver.disconnect();
+    this.destroyed = true; clearTimeout(this.reconcileTimer); this.reconcileTimer = undefined; this.tabTitle.destroy(); this.feed.reset(); this.mutations.disconnect(); this.nearObserver.disconnect(); this.visibleObserver.disconnect();
     document.removeEventListener('click', this.onCommentExpansion, true);
     document.removeEventListener('toggle', this.onCommentExpansion, true);
     document.removeEventListener('visibilitychange', this.onVisibility); window.removeEventListener('popstate', this.onRoute);
