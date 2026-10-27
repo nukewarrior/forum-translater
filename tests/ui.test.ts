@@ -134,6 +134,14 @@ describe('Reddit homepage settings access', () => {
     expect(dialog?.open).toBe(false);
     expect(button?.hidden).toBe(false);
 
+    // Home sorting uses real routes such as /best/ and /new/.
+    for (const path of ['/best/', '/hot/', '/new/', '/top/', '/rising/']) {
+      route.pathname = path;
+      route.href = 'https://www.reddit.com' + path + '?feed=home';
+      document.body.append(document.createElement('span'));
+      await vi.waitFor(() => expect(button?.hidden).toBe(false));
+    }
+
     // Navigation to a subreddit hides the entry even with no full reload.
     route.pathname = '/r/selfhosted/';
     route.href = 'https://www.reddit.com/r/selfhosted/';
