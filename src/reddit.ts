@@ -128,10 +128,36 @@ export function contentIdentity(element: HTMLElement): string {
     const id = /^\/[^/]+\/(?:status|article)\/(\d+)(?:\/|$)/.exec(location.pathname)?.[1];
     if (id) return `x:status:${id}`;
   }
-  const owner = element.closest('shreddit-comment,shreddit-post,.thing,[data-testid="post-container"],[data-testid="search-post-with-content-preview"],[data-testid="comment"]');
-  const identity = owner?.getAttribute('thingid') ?? owner?.getAttribute('post-id') ?? owner?.getAttribute('id');
-  if (identity) return identity;
-  const href = owner?.querySelector('[data-testid="post-title-text"]')?.getAttribute('href') ?? '';
-  const id = /\/comments\/([a-z0-9]+)(?:[/?#]|$)/i.exec(href)?.[1];
-  return id ? `t3_${id}` : '';
+  const owner = element.closest<HTMLElement>('shreddit-comment,shreddit-post,.thing,[data-testid="post-container"],[data-testid="search-post-with-content-preview"],[data-testid="comment"]');
+  if (!owner) return '';
+  // Comments use a different namespace from posts.
+  const comment = owner.matches('shreddit-comment,.thing.comment,[data-testid="comment"]');
+  const prefix = comment ? 't1_' : 't3_';
+  for (const name of ['thingid', 'data-fullname', 'post-id', 'data-post-id', 'id']) {
+    const value = owner.getAttribute(name)?.trim() ?? '';
+    const match = /^t([13])_([a-z0-9]+)$/i.exec(value);
+    if (match && match[1] === (comment ? '1' : '3')) return prefix + match[2]!.toLowerCase();
+    // Only typed post-id attributes may contain a bare post ID.
+    if (!comment && (name === 'post-id' || name === 'data-post-id') && /^[a-z0-9]+$/i.test(value)) return 't3_' + value.toLowerCase();
+  }
+  if (comment) return owner.getAttribute('id') ?? '';
+  // A virtualized feed card and its detail view can have unrelated DOM IDs.
+  // Use the canonical Reddit permalink as a fallback, never an ephemeral wrapper.
+  const urls = [
+    owner.getAttribute('permalink'), owner.getAttribute('content-href'),
+    element.closest('a')?.getAttribute('href'),
+    ...[...owner.querySelectorAll<HTMLAnchorElement>(
+      'a[slot="title"][href],a[id^="post-title"][href],a[data-testid="post-title-text"][href],a[data-testid="post-title"][href],a.title[href],a[href*="/comments/"]'
+    )].map(link => link.getAttribute('href')),
+  ];
+  for (const href of urls) {
+    if (!href) continue;
+    try {
+      const url = new URL(href, location.href);
+      if (!/(^|\.)reddit\.com$/i.test(url.hostname)) continue;
+      const match = /\/comments\/([a-z0-9]+)(?:\/|$)/i.exec(url.pathname);
+      if (match) return 't3_' + match[1]!.toLowerCase();
+    } catch { /* Ignore invalid or unrelated links. */ }
+  }
+  return '';
 }
