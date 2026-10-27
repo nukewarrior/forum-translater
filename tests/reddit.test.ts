@@ -1,10 +1,65 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest';
-import { contentIdentity, discover, sourceSnapshot } from '../src/reddit';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { contentIdentity, discover, feedTitleLink, isRedditFeedRoute, isRedditHomeFeedRoute, sourceSnapshot } from '../src/reddit';
 import { translationSectionPlans } from '../src/translation/translation-text';
 import { normalizeSettings } from '../src/settings';
 
+afterEach(() => vi.unstubAllGlobals());
+
 describe('Reddit content owners', () => {
+  it('recognizes only home and subreddit feed routes for the new switch', () => {
+    expect(isRedditFeedRoute('/', 'www.reddit.com')).toBe(true);
+    for (const homePath of ['/', '/best/', '/hot/', '/new/', '/top/', '/rising/', '/popular/', '/all/']) {
+      expect(isRedditHomeFeedRoute(homePath, 'www.reddit.com')).toBe(true);
+      expect(isRedditFeedRoute(homePath, 'www.reddit.com')).toBe(true);
+    }
+    expect(isRedditHomeFeedRoute('/r/DeepSeek/', 'www.reddit.com')).toBe(false);
+    expect(isRedditHomeFeedRoute('/best/', 'x.com')).toBe(false);
+    expect(isRedditFeedRoute('/user/example/', 'www.reddit.com')).toBe(false);
+    expect(isRedditFeedRoute('/settings/', 'www.reddit.com')).toBe(false);
+    expect(isRedditFeedRoute('/r/DeepSeek/', 'reddit.com')).toBe(true);
+    expect(isRedditFeedRoute('/r/DeepSeek/new/', 'www.reddit.com')).toBe(true);
+    expect(isRedditFeedRoute('/r/DeepSeek/best/', 'www.reddit.com')).toBe(true);
+    expect(isRedditFeedRoute('/r/DeepSeek/hot/', 'www.reddit.com')).toBe(true);
+    expect(isRedditFeedRoute('/r/DeepSeek/top/', 'www.reddit.com')).toBe(true);
+    expect(isRedditFeedRoute('/r/DeepSeek/rising/', 'www.reddit.com')).toBe(true);
+    expect(isRedditFeedRoute('/r/all/top/', 'www.reddit.com')).toBe(true);
+    expect(isRedditFeedRoute('/r/DeepSeek/comments/abc/post/', 'www.reddit.com')).toBe(false);
+    expect(isRedditFeedRoute('/r/DeepSeek/search/', 'www.reddit.com')).toBe(false);
+    expect(isRedditFeedRoute('/', 'x.com')).toBe(false);
+  });
+  it('finds card and compact titles without unrelated headings or unsafe translated links', () => {
+    document.body.innerHTML = `<h3>Community navigation</h3>
+      <shreddit-post post-id="t3_a"><a id="post-title-t3_a" href="/r/test/comments/a/hello/"><h2>Card title</h2></a></shreddit-post>
+      <shreddit-post post-id="t3_b"><a slot="title" href="/r/test/comments/b/hello/">Compact title</a></shreddit-post>
+      <shreddit-post post-id="t3_c"><a id="post-title-t3_c" href="https://example.com/r/test/comments/c/">Untrusted title link</a></shreddit-post>`;
+    const titles = discover(document).filter(item => item.kind === 'title');
+    expect(titles.map(item => item.element.textContent).sort()).toEqual(['Card title', 'Compact title', 'Untrusted title link']);
+    const card = titles.find(item => item.element.textContent === 'Card title');
+    const unsafe = titles.find(item => item.element.textContent === 'Untrusted title link');
+    expect(card && feedTitleLink(card.element)?.getAttribute('href')).toBe('/r/test/comments/a/hello/');
+    expect(unsafe && feedTitleLink(unsafe.element)).toBeNull();
+  });
+  it('normalizes Reddit post IDs across list and detail markup', () => {
+    document.body.innerHTML = '<shreddit-post id="virtual-row" post-id="ABC123"><a id="post-title-t3_abc123" href="/r/test/comments/abc123/hello/"><h2>Same English title</h2></a></shreddit-post>';
+    expect(contentIdentity(document.querySelector<HTMLElement>('a')!)).toBe('t3_abc123');
+    document.body.innerHTML = '<shreddit-post thingid="t3_abc123"><a slot="title"><h1>Same English title</h1></a></shreddit-post>';
+    expect(contentIdentity(document.querySelector<HTMLElement>('[slot="title"]')!)).toBe('t3_abc123');
+  });
+  it('uses post title links or permalinks instead of temporary wrapper IDs', () => {
+    vi.stubGlobal('location', { hostname: 'www.reddit.com', pathname: '/', href: 'https://www.reddit.com/' });
+    document.body.innerHTML = '<shreddit-post id="virtual-card-42"><a id="post-title-t3_abc123" href="/r/test/comments/ABC123/hello/">Same English title</a></shreddit-post>';
+    expect(contentIdentity(document.querySelector<HTMLElement>('a')!)).toBe('t3_abc123');
+    document.body.innerHTML = '<shreddit-post id="temporary" permalink="/r/test/comments/abc123/hello/"><a slot="title">Same English title</a></shreddit-post>';
+    expect(contentIdentity(document.querySelector<HTMLElement>('a')!)).toBe('t3_abc123');
+    document.body.innerHTML = '<shreddit-post id="temporary"><a slot="title" href="https://example.com/r/test/comments/abc123/">External link</a></shreddit-post>';
+    expect(contentIdentity(document.querySelector<HTMLElement>('a')!)).toBe('');
+  });
+  it('does not confuse comments or other posts with the same title', () => {
+    document.body.innerHTML = '<shreddit-comment thingid="t1_AbC"><div slot="comment">Comment</div></shreddit-comment><shreddit-post post-id="zzz123"><a slot="title">Same English title</a></shreddit-post>';
+    expect(contentIdentity(document.querySelector<HTMLElement>('[slot="comment"]')!)).toBe('t1_abc');
+    expect(contentIdentity(document.querySelector<HTMLElement>('[slot="title"]')!)).toBe('t3_zzz123');
+  });
   it('excludes injected translations from link labels in source snapshots', () => {
     const source = document.createElement('div'); source.innerHTML = '<a href="https://example.com">example.com</a>';
     const before = sourceSnapshot(source).innerHTML;
@@ -29,6 +84,7 @@ describe('Reddit content owners', () => {
     expect(discover(document).map(item => item.kind)).toEqual(['title', 'body', 'comment']);
   });
   it('finds current Reddit search result titles and previews without the full-card accessibility link', () => {
+    vi.stubGlobal('location', { hostname: 'www.reddit.com', pathname: '/search/', href: 'https://www.reddit.com/search/' });
     document.body.innerHTML = `<div data-testid="search-post-with-content-preview">
       <h2><a data-testid="post-title" href="/r/test/comments/abc/search-result/"><span>Search result title</span></a></h2>
       <div data-testid="sdui-post-unit">

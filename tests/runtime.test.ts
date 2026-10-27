@@ -32,6 +32,115 @@ afterEach(() => { runtime?.destroy(); runtime = undefined; service.destroy(); vi
 function title(): HTMLElement { const element = document.querySelector<HTMLElement>('a[slot="title"]'); if (!element) throw new Error('Missing fixture'); return element; }
 async function settle(): Promise<void> { await vi.advanceTimersByTimeAsync(150); }
 
+it('keeps Reddit feed titles off by default while allowing detail titles independently', () => {
+  vi.stubGlobal('location', { hostname: 'www.reddit.com', pathname: '/', href: 'https://www.reddit.com/' });
+  runtime = new RedditRuntime({ ...service.settings, title: true, redditFeedTitle: false }, service);
+  expect(Observer.instances[0]?.targets.has(title())).toBe(false);
+});
+
+it('keeps English above the Chinese title in default bilingual mode', async () => {
+  vi.stubGlobal('location', { hostname: 'www.reddit.com', pathname: '/', href: 'https://www.reddit.com/' });
+  title().setAttribute('href', '/r/test/comments/first/hello/');
+  const translate = vi.spyOn(service, 'section').mockResolvedValue('你好，世界');
+  runtime = new RedditRuntime({ ...service.settings, title: false, redditFeedTitle: true, translationOnly: false }, service);
+  Observer.instances[0]?.emit(title()); await settle();
+  const box = document.querySelector<HTMLAnchorElement>('a[data-ft-owned="translation"].ft-feed-title');
+  expect(box?.previousElementSibling).toBe(title());
+  expect(title().textContent).toBe('Hello world');
+  expect(title().hasAttribute('data-ft-original-hidden')).toBe(false);
+  expect(box?.textContent).toContain('你好，世界');
+  expect(translate).toHaveBeenCalledOnce();
+});
+
+it('links translated feed titles to Reddit posts in translation-only mode', async () => {
+  vi.stubGlobal('location', { hostname: 'www.reddit.com', pathname: '/r/test/', href: 'https://www.reddit.com/r/test/' });
+  title().setAttribute('href', '/r/test/comments/first/hello/');
+  const translate = vi.spyOn(service, 'section').mockResolvedValue('你好，世界');
+  runtime = new RedditRuntime({ ...service.settings, title: false, redditFeedTitle: true, translationOnly: true }, service);
+  Observer.instances[0]?.emit(title()); await settle();
+  const box = document.querySelector<HTMLAnchorElement>('a[data-ft-owned="translation"].ft-feed-title');
+  expect(box?.href).toBe('https://www.reddit.com/r/test/comments/first/hello/');
+  expect(box?.textContent).toContain('你好，世界');
+  expect(title().hasAttribute('data-ft-original-hidden')).toBe(true);
+  expect(translate).toHaveBeenCalledOnce();
+});
+
+it('does not hide feed source links without a safe translated link', async () => {
+  vi.stubGlobal('location', { hostname: 'www.reddit.com', pathname: '/', href: 'https://www.reddit.com/' });
+  const translate = vi.spyOn(service, 'section').mockResolvedValue('中文译文');
+  runtime = new RedditRuntime({ ...service.settings, redditFeedTitle: true, translationOnly: true }, service);
+  Observer.instances[0]?.emit(title()); await settle();
+  expect(title().hasAttribute('data-ft-original-hidden')).toBe(false);
+  expect(document.querySelector('[data-ft-owned="translation"]')?.textContent).toContain('中文译文');
+  expect(translate).toHaveBeenCalledOnce();
+});
+
+it.each(['google', 'ai'] as const)(
+  'reuses a persisted Reddit feed title on its detail page with %s even when context changes',
+  async provider => {
+    const stored = new Map<string, unknown>();
+    vi.stubGlobal('GM_getValue', (key: string, fallback: unknown) => stored.get(key) ?? fallback);
+    vi.stubGlobal('GM_setValue', (key: string, value: unknown) => { stored.set(key, value); });
+    const route = { hostname: 'www.reddit.com', pathname: '/', href: 'https://www.reddit.com/' };
+    vi.stubGlobal('location', route);
+    const settings = {
+      ...DEFAULTS, provider, redditFeedTitle: true, title: true, body: false, comment: false,
+      ai: { ...DEFAULTS.ai, baseUrl: 'https://api.example.com/v1', model: 'example-model', prompt: 'Keep names intact' },
+    };
+    service.destroy();
+    service = new TranslationService(settings, new TranslationCache());
+    document.body.innerHTML = '<shreddit-post id="virtualized-123" permalink="/r/test/comments/abc123/same-title/"><a id="post-title-t3_abc123" href="/r/test/comments/abc123/same-title/"><h2>Same English title</h2></a></shreddit-post>';
+    const listing = document.querySelector<HTMLElement>('a[id^="post-title"]');
+    if (!listing) throw new Error('Missing listing fixture');
+    expect(reddit.contentIdentity(listing)).toBe('t3_abc123');
+    const first = vi.spyOn(service, 'section').mockResolvedValue('同一个中文标题');
+    runtime = new RedditRuntime(settings, service);
+    Observer.instances[0]?.emit(listing); await settle();
+    expect(first).toHaveBeenCalledOnce();
+    expect(document.querySelector('[data-ft-owned="translation"]')?.textContent).toContain('同一个中文标题');
+    runtime.destroy(); runtime = undefined;
+    // The first runtime has flushed the persisted cache, as a real navigation would.
+    expect(stored.has('ft:translations:v1')).toBe(true);
+    service.destroy(); Observer.instances = [];
+    route.pathname = '/r/test/comments/abc123/same-title/';
+    route.href = 'https://www.reddit.com/r/test/comments/abc123/same-title/';
+    document.body.innerHTML = '<shreddit-post thingid="t3_abc123"><a slot="title"><h1>Same English title</h1></a><div slot="text-body"><p>Extra post context only available on the detail page.</p></div></shreddit-post>';
+    service = new TranslationService(settings, new TranslationCache());
+    const second = vi.spyOn(service, 'section').mockRejectedValue(new Error('Cache miss unexpectedly translated again'));
+    runtime = new RedditRuntime(settings, service);
+    Observer.instances[0]?.emit(title()); await settle();
+    expect(reddit.contentIdentity(title())).toBe('t3_abc123');
+    expect(second).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-ft-owned="translation"]')?.textContent).toContain('同一个中文标题');
+  }
+);
+
+it('does not reuse a feed title cached for a different Reddit post ID', async () => {
+  const stored = new Map<string, unknown>();
+  vi.stubGlobal('GM_getValue', (key: string, fallback: unknown) => stored.get(key) ?? fallback);
+  vi.stubGlobal('GM_setValue', (key: string, value: unknown) => { stored.set(key, value); });
+  const route = { hostname: 'www.reddit.com', pathname: '/', href: 'https://www.reddit.com/' };
+  vi.stubGlobal('location', route);
+  const settings = { ...DEFAULTS, redditFeedTitle: true, title: true, body: false, comment: false };
+  service.destroy(); service = new TranslationService(settings, new TranslationCache());
+  document.body.innerHTML = '<shreddit-post post-id="abc123"><a slot="title" href="/r/test/comments/abc123/">Same English title</a></shreddit-post>';
+  const first = vi.spyOn(service, 'section').mockResolvedValue('第一篇译文');
+  runtime = new RedditRuntime(settings, service);
+  Observer.instances[0]?.emit(title()); await settle();
+  expect(first).toHaveBeenCalledOnce();
+  runtime.destroy(); runtime = undefined; service.destroy(); Observer.instances = [];
+  route.pathname = '/r/test/comments/different/';
+  route.href = 'https://www.reddit.com/r/test/comments/different/';
+  document.body.innerHTML = '<shreddit-post post-id="different"><a slot="title"><h1>Same English title</h1></a></shreddit-post>';
+  service = new TranslationService(settings, new TranslationCache());
+  const next = vi.spyOn(service, 'section').mockResolvedValue('第二篇译文');
+  runtime = new RedditRuntime(settings, service);
+  Observer.instances[0]?.emit(title()); await settle();
+  // Paragraph-cache entries must never be reused across distinct post IDs.
+  expect(next).toHaveBeenCalledOnce();
+  expect(document.querySelector('[data-ft-owned="translation"]')?.textContent).toContain('第二篇译文');
+});
+
 it('retains completed background translations during a swipe and fills them once scrolling settles', async () => {
   let partial!: (text: string) => void; let finish!: (text: string) => void;
   const translate = vi.spyOn(service, 'section').mockImplementation((_text, _owner, _priority, _signal, onPartial) => {

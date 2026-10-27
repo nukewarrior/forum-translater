@@ -2,7 +2,7 @@ import { createLocalFontQuery, mountFontSettings } from './font-settings';
 import { isXSite, TRANSLATION_THEMES, type TranslationTheme } from './settings';
 import { mountProfileMenu, mountProfileSection } from './profile-ui';
 import { readTranslationMetrics } from './translation/metrics';
-import { OWNED } from './reddit';
+import { isRedditHomeFeedRoute, OWNED } from './reddit';
 import { normalizeSettings, type Settings } from './settings';
 export function mountControls(read: () => Settings, save: (settings: Settings) => void, clearCache: () => void, onProfileChanged?: () => void): () => void {
   const host = document.createElement('div'); host.dataset.ftOwned = 'controls'; host.hidden = true; document.body.append(host);
@@ -98,10 +98,12 @@ export function mountControls(read: () => Settings, save: (settings: Settings) =
     for (const [value, name] of Object.entries(TRANSLATION_THEMES)) { const option = document.createElement('option'); option.value = value; option.textContent = name; theme.append(option); }
     theme.value = current.translationTheme; themeLabel.append(theme); scope.append(themeLabel);
     input('enabled', '开启本页及后续页面自动翻译', 'checkbox', current.enabled);
-    for (const [key, label] of [['title', '帖子标题'], ['body', '帖子正文'], ['comment', '评论']] as const) {
+    for (const [key, label] of [['title', isXSite() ? '帖子标题' : '帖子详情及搜索结果标题'], ['body', '帖子正文'], ['comment', '评论']] as const) {
       const field = input(key, isXSite() && key === 'body' ? '推文、回复与引用推文' : label, 'checkbox', current[key]);
       if (isXSite() && key !== 'body' && field.parentElement) field.parentElement.hidden = true;
     }
+    const feedTitle = input('redditFeedTitle', '首页及板块列表的帖子标题', 'checkbox', current.redditFeedTitle);
+    if (isXSite() && feedTitle.parentElement) feedTitle.parentElement.hidden = true;
     input('before', '向上预加载（像素）', 'number', String(current.before));
     input('after', '向下预加载（像素）', 'number', String(current.after));
     disposeProfiles = mountProfileSection(api, () => { onProfileChanged?.(); profileMenu.refresh(); });
@@ -117,7 +119,7 @@ export function mountControls(read: () => Settings, save: (settings: Settings) =
       if (fontControls && !fontControls.valid()) { activate('fonts'); fontSection?.querySelector<HTMLInputElement>('input:invalid')?.reportValidity(); return; }
       next.fonts = fontControls?.read() ?? current.fonts;
       next.translationTheme = theme.value as TranslationTheme;
-      for (const name of ['enabled', 'title', 'body', 'comment', 'translationOnly'] as const) next[name] = (fields.get(name) as HTMLInputElement).checked;
+      for (const name of ['enabled', 'title', 'redditFeedTitle', 'body', 'comment', 'translationOnly'] as const) next[name] = (fields.get(name) as HTMLInputElement).checked;
       for (const name of ['before', 'after'] as const) next[name] = Number(fields.get(name)?.value);
       for (const field of fields.values()) {
         if (!field.matches(':disabled') && !field.checkValidity()) { activate('scope'); field.reportValidity(); return; }
@@ -138,7 +140,7 @@ export function mountControls(read: () => Settings, save: (settings: Settings) =
   dialog.addEventListener('cancel', event => { event.preventDefault(); setOpen(false); });
   shadow.addEventListener('keydown', event => { if ((event as KeyboardEvent).key === 'Escape' && !panel.hidden) setOpen(false); });
   const profileMenu = mountProfileMenu(() => { onProfileChanged?.(); if (!panel.hidden) render(); });
-  // On Reddit's root feed, show a lightweight entry to the existing settings dialog.
+  // On Reddit's home feed (including sort routes), show a shortcut to the settings dialog.
   const homeShortcut = !isXSite() ? mountRedditHomeSettingsShortcut(
     () => setOpen(true), () => dialog.open,
   ) : undefined;
@@ -149,7 +151,7 @@ export function mountControls(read: () => Settings, save: (settings: Settings) =
   return () => { fontControls?.destroy(); disposeProfiles?.(); profileMenu.destroy(); if (dialog.open) dialog.close(); GM_unregisterMenuCommand(menu); GM_unregisterMenuCommand(metricsMenu); homeShortcut?.destroy(); host.remove(); };
 }
 
-/** Home-only settings shortcut, using the same dialog as the Tampermonkey menu. */
+/** Reddit home-feed settings shortcut, including sort routes. */
 function mountRedditHomeSettingsShortcut(
   openSettings: () => void,
   isDialogOpen: () => boolean,
@@ -180,8 +182,7 @@ function mountRedditHomeSettingsShortcut(
   let previousRoute = '';
   const update = (): void => {
     previousRoute = location.href;
-    button.hidden = !/(^|\.)reddit\.com$/.test(location.hostname)
-      || location.pathname !== '/' || isDialogOpen();
+    button.hidden = !isRedditHomeFeedRoute() || isDialogOpen();
   };
   // Reddit may use history.pushState without firing popstate. This observer
   // only detects URL changes; it does not scan or mutate feed content.

@@ -5,6 +5,8 @@ const X_ARTICLE_BLOCK = '[data-block="true"],p,h1,h2,h3,h4,h5,h6,li,blockquote';
 const RULES: ReadonlyArray<readonly [Kind, string]> = [
   ['title', 'shreddit-post [slot="title"], shreddit-post h1, .thing.link > .entry a.title, [data-testid="post-container"] [data-adclicklocation="title"] h3'],
   ['title', '[data-testid="search-post-with-content-preview"] [data-testid="post-title-text"]'],
+  // Current Reddit card and compact feeds use more than one title-link shape.
+  ['title', 'shreddit-post a[id^="post-title"], shreddit-post [data-testid="post-title-text"], [data-testid="post-container"] a[id^="post-title"], [data-testid="post-container"] a[data-testid="post-title"]'],
   ['title', '[data-testid="twitterArticleTitle"], [data-testid="twitter-article-title"]'],
   // Observe article blocks separately: a whole-article owner starts every
   // paragraph at once and rebuilds the entire document on each partial result.
@@ -15,6 +17,36 @@ const RULES: ReadonlyArray<readonly [Kind, string]> = [
 ];
 const EXCLUDE = `${OWNED},[data-image-insight-host],textarea,input,[contenteditable]:not([contenteditable="false"]),[slot="credit-bar"],shreddit-ad-post`;
 export function contentSelector(kind: Kind): string { return RULES.filter(([value]) => value === kind).map(([, selector]) => selector).join(','); }
+/** Reddit may navigate from / to /best, /hot, /new, /top or /rising when changing the home feed sort. */
+export function isRedditHomeFeedRoute(pathname = location.pathname, hostname = location.hostname): boolean {
+  if (!/(^|\.)reddit\.com$/i.test(hostname)) return false;
+  const path = pathname.replace(/\/+$/, '') || '/';
+  return path === '/' || /^\/(?:best|hot|new|top|rising|popular|all)$/i.test(path);
+}
+/** Restrict the new toggle to Reddit home and community listing routes. */
+export function isRedditFeedRoute(pathname = location.pathname, hostname = location.hostname): boolean {
+  if (isRedditHomeFeedRoute(pathname, hostname)) return true;
+  if (!/(^|\.)reddit\.com$/i.test(hostname)) return false;
+  const path = pathname.replace(/\/+$/, '') || '/';
+  return /^\/r\/[^/]+(?:\/(?:best|hot|new|top|rising|controversial))?$/i.test(path);
+}
+export function isRedditFeedTitle(element: HTMLElement): boolean {
+  return isRedditFeedRoute() && !!element.closest('shreddit-post,.thing.link,[data-testid="post-container"]');
+}
+/** Preserve native browser navigation for translated feed titles, but never clone unsafe URLs. */
+export function feedTitleLink(element: HTMLElement): HTMLAnchorElement | null {
+  const owner = element.closest('shreddit-post,.thing.link,[data-testid="post-container"]');
+  const link = (element.closest('a') || element.querySelector('a[href*="/comments/"]')
+    || owner?.querySelector('a[slot="title"],a[id^="post-title"],a[data-testid="post-title"],a.title')) as Element | null;
+  if (!(link instanceof HTMLAnchorElement)) return null;
+  const href = link.getAttribute('href');
+  if (!href) return null;
+  try {
+    const url = new URL(href, location.href);
+    if (url.origin !== new URL(location.href).origin || !/\/comments\/[a-z0-9]+/i.test(url.pathname)) return null;
+    return link;
+  } catch { return null; }
+}
 export interface Candidate { element: HTMLElement; kind: Kind }
 export function discover(root: ParentNode): Candidate[] {
   const found = new Map<HTMLElement, Kind>();
@@ -103,10 +135,36 @@ export function contentIdentity(element: HTMLElement): string {
     const id = /^\/[^/]+\/(?:status|article)\/(\d+)(?:\/|$)/.exec(location.pathname)?.[1];
     if (id) return `x:status:${id}`;
   }
-  const owner = element.closest('shreddit-comment,shreddit-post,.thing,[data-testid="post-container"],[data-testid="search-post-with-content-preview"],[data-testid="comment"]');
-  const identity = owner?.getAttribute('thingid') ?? owner?.getAttribute('post-id') ?? owner?.getAttribute('id');
-  if (identity) return identity;
-  const href = owner?.querySelector('[data-testid="post-title-text"]')?.getAttribute('href') ?? '';
-  const id = /\/comments\/([a-z0-9]+)(?:[/?#]|$)/i.exec(href)?.[1];
-  return id ? `t3_${id}` : '';
+  const owner = element.closest<HTMLElement>('shreddit-comment,shreddit-post,.thing,[data-testid="post-container"],[data-testid="search-post-with-content-preview"],[data-testid="comment"]');
+  if (!owner) return '';
+  // Comments use a different namespace from posts.
+  const comment = owner.matches('shreddit-comment,.thing.comment,[data-testid="comment"]');
+  const prefix = comment ? 't1_' : 't3_';
+  for (const name of ['thingid', 'data-fullname', 'post-id', 'data-post-id', 'id']) {
+    const value = owner.getAttribute(name)?.trim() ?? '';
+    const match = /^t([13])_([a-z0-9]+)$/i.exec(value);
+    if (match && match[1] === (comment ? '1' : '3')) return prefix + match[2]!.toLowerCase();
+    // Only typed post-id attributes may contain a bare post ID.
+    if (!comment && (name === 'post-id' || name === 'data-post-id') && /^[a-z0-9]+$/i.test(value)) return 't3_' + value.toLowerCase();
+  }
+  if (comment) return owner.getAttribute('id') ?? '';
+  // A virtualized feed card and its detail view can have unrelated DOM IDs.
+  // Use the canonical Reddit permalink as a fallback, never an ephemeral wrapper.
+  const urls = [
+    owner.getAttribute('permalink'), owner.getAttribute('content-href'),
+    element.closest('a')?.getAttribute('href'),
+    ...[...owner.querySelectorAll<HTMLAnchorElement>(
+      'a[slot="title"][href],a[id^="post-title"][href],a[data-testid="post-title-text"][href],a[data-testid="post-title"][href],a.title[href],a[href*="/comments/"]'
+    )].map(link => link.getAttribute('href')),
+  ];
+  for (const href of urls) {
+    if (!href) continue;
+    try {
+      const url = new URL(href, location.href);
+      if (!/(^|\.)reddit\.com$/i.test(url.hostname)) continue;
+      const match = /\/comments\/([a-z0-9]+)(?:\/|$)/i.exec(url.pathname);
+      if (match) return 't3_' + match[1]!.toLowerCase();
+    } catch { /* Ignore invalid or unrelated links. */ }
+  }
+  return '';
 }

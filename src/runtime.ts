@@ -2,7 +2,7 @@ import { redditContext } from './reddit-context';
 import { xParagraphs } from './x-paragraphs';
 import { FeedDeduplicator } from './feed-deduplicator';
 import { TabTitle } from './tab-title';
-import { contentIdentity, discover, isReadable, OWNED, sourceSnapshot } from './reddit';
+import { contentIdentity, discover, feedTitleLink, isReadable, isRedditFeedTitle, OWNED, sourceSnapshot } from './reddit';
 import { OriginalVisibility } from './original-visibility';
 import { isXSite, loadTranslationOnly, type Kind, type Settings, type TranslationTheme } from './settings';
 import { TranslationService } from './translation/service';
@@ -10,7 +10,7 @@ import { renderTranslationText, TranslationSectionsRenderer, translationBlockNee
 import { TRANSLATION_PROMPT_VERSION } from './translation/translation-prompt';
 import { isOwnedMutation } from './dom-mutations';
 interface Entry {
-  element: HTMLElement; kind: Kind; box: HTMLDivElement | null; controller: AbortController | null;
+  element: HTMLElement; kind: Kind; feedTitle: boolean; box: HTMLElement | null; controller: AbortController | null;
   near: boolean; visible: boolean; state: 'idle' | 'loading' | 'done' | 'error';
   signature: string; sourceSignature: string | null; identity: string; owner: string; completed: Map<number, string>; inlineBoxes: HTMLDivElement[]; originals: OriginalVisibility;
 }
@@ -175,7 +175,8 @@ export class RedditRuntime {
         // and in-flight work instead of treating the background as collapsed content.
         if (isInactiveXBackground(candidate.element)) continue;
         const { kind } = candidate;
-        if (!this.settings[kind]) continue;
+        const feedTitle = kind === 'title' && isRedditFeedTitle(candidate.element);
+        if (feedTitle ? !this.settings.redditFeedTitle : !this.settings[kind]) continue;
         const known = this.entries.get(candidate.element);
         if (known && known.sourceSignature === known.signature && known.identity === contentIdentity(candidate.element)
           && !/^zh(?:-|$)/i.test(candidate.element.lang) && (known.state !== 'done' || known.box?.isConnected)) {
@@ -206,7 +207,7 @@ export class RedditRuntime {
         const rect = element.getBoundingClientRect();
         const visibleNow = !document.hidden && rect.width > 0 && rect.height > 0
           && rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth;
-        const entry: Entry = { element, kind, box: null, controller: null, near: sameContent ? existing.near : false, visible: sameContent ? existing.visible : false,
+        const entry: Entry = { element, kind, feedTitle, box: null, controller: null, near: sameContent ? existing.near : false, visible: sameContent ? existing.visible : false,
           state: 'idle', completed: new Map(), inlineBoxes: [], originals: new OriginalVisibility(), signature, sourceSignature: signature, identity, owner: sameContent ? existing.owner : String(++this.sequence) };
         if (visibleNow) { entry.visible = true; entry.near = true; }
         this.entries.set(element, entry); this.nearObserver.observe(element); this.visibleObserver.observe(element);
@@ -290,7 +291,15 @@ export class RedditRuntime {
     const rendered = new Map<number, string>();
     let renderedState: string | undefined;
     let sectionRenderer: TranslationSectionsRenderer | undefined;
-    const box = document.createElement('div'); box.dataset.ftOwned = 'translation'; box.className = `ft-translation${this.translationOnly ? ' ft-translation-only' : ''}${entry.kind === 'title' ? ' ft-translation-title' : ''}`;
+    const nativeLink = entry.feedTitle ? feedTitleLink(entry.element) : null;
+    const box: HTMLElement = nativeLink ? document.createElement('a') : document.createElement('div');
+    box.dataset.ftOwned = 'translation'; box.className = `ft-translation${this.translationOnly ? ' ft-translation-only' : ''}${entry.kind === 'title' ? ' ft-translation-title' : ''}${entry.feedTitle ? ' ft-feed-title' : ''}`;
+    if (nativeLink && box instanceof HTMLAnchorElement) {
+      // Preserve native browser navigation, including Cmd/Ctrl-click and keyboard actions.
+      box.href = new URL(nativeLink.getAttribute('href') ?? '', location.href).href;
+      if (nativeLink.target) box.target = nativeLink.target;
+      box.rel = 'noopener noreferrer';
+    }
     if (entry.kind === 'title') {
       const title = entry.element.querySelector('h1,h2,h3') ?? entry.element;
       const size = Number.parseFloat(getComputedStyle(title).fontSize);
@@ -370,9 +379,15 @@ export class RedditRuntime {
       if (renderedState === stamp) return;
       renderedState = stamp;
       box.toggleAttribute('data-ft-streaming', streaming.size > 0);
-      if (this.translationOnly && pending.size === 0 && failed.size === 0) entry.originals.hide(entry.element);
+      // Without a safe post link, keep the original clickable title visible.
+      if (this.translationOnly && pending.size === 0 && failed.size === 0
+        && (!entry.feedTitle || box instanceof HTMLAnchorElement)) entry.originals.hide(entry.element);
       sectionRenderer ??= new TranslationSectionsRenderer(snapshot, box);
       sectionRenderer.render(translations, { pending, failed, streaming });
+      // Avoid invalid nested interactive links inside the translated title link.
+      if (box instanceof HTMLAnchorElement) {
+        for (const nested of box.querySelectorAll('a')) nested.replaceWith(...nested.childNodes);
+      }
       for (const status of box.querySelectorAll(':scope > [data-ft-owned="translation-status"]')) status.remove();
       if (failed.size) {
         const reason = document.createElement('span'); reason.dataset.ftOwned = 'translation-status'; reason.className = 'hnr-translation-failure'; reason.setAttribute('role', 'status');

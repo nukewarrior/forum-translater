@@ -2,7 +2,7 @@
 
 > Reddit 与 X/Twitter 的逐段中文翻译脚本。支持 Google、Microsoft 和多个自定义 AI Profile，兼容 OpenAI Responses API 与 Chat Completions API。
 
-**版本：0.3.3（原生 X 布局）** · MIT License · 基于 [sunbigfly/forum-translater](https://github.com/sunbigfly/forum-translater) 定制
+**版本：0.3.4（Reddit 列表标题双语翻译）** · MIT License · 基于 [sunbigfly/forum-translater](https://github.com/sunbigfly/forum-translater) 定制
 
 ## 安装
 
@@ -42,7 +42,8 @@
 
 ## 保留的阅读能力
 
-- Reddit 标题、正文、评论，X 推文、回复、引用及长帖逐段翻译。
+- Reddit 帖子详情/搜索标题、正文、评论，X 推文、回复、引用及长帖逐段翻译。
+- Reddit 首页和板块信息流的帖子标题可在「翻译范围」单独开启（默认关闭）；中英双语上下排列，译文保留帖子链接，并复用现有可视区调度、缓存与「只显示译文」模式。
 - 保留原文、链接、代码、受保护的占位符及段落结构。
 - 译文在原文下方显示；提供多种样式、仅显示译文、分类翻译开关。
 - 视口内容优先、批量 AI 调度、预加载、并发限制、缓存和失败重试。
