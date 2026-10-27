@@ -17,11 +17,18 @@ const RULES: ReadonlyArray<readonly [Kind, string]> = [
 ];
 const EXCLUDE = `${OWNED},[data-image-insight-host],textarea,input,[contenteditable]:not([contenteditable="false"]),[slot="credit-bar"],shreddit-ad-post`;
 export function contentSelector(kind: Kind): string { return RULES.filter(([value]) => value === kind).map(([, selector]) => selector).join(','); }
-/** Restrict the new toggle to Reddit home and community listing routes. */
-export function isRedditFeedRoute(pathname = location.pathname, hostname = location.hostname): boolean {
+/** Reddit may navigate from / to /best, /hot, /new, /top or /rising when changing the home feed sort. */
+export function isRedditHomeFeedRoute(pathname = location.pathname, hostname = location.hostname): boolean {
   if (!/(^|\.)reddit\.com$/i.test(hostname)) return false;
   const path = pathname.replace(/\/+$/, '') || '/';
-  return path === '/' || /^\/r\/[^/]+(?:\/(?:hot|new|top|rising|controversial))?$/i.test(path);
+  return path === '/' || /^\/(?:best|hot|new|top|rising|popular|all)$/i.test(path);
+}
+/** Restrict the new toggle to Reddit home and community listing routes. */
+export function isRedditFeedRoute(pathname = location.pathname, hostname = location.hostname): boolean {
+  if (isRedditHomeFeedRoute(pathname, hostname)) return true;
+  if (!/(^|\.)reddit\.com$/i.test(hostname)) return false;
+  const path = pathname.replace(/\/+$/, '') || '/';
+  return /^\/r\/[^/]+(?:\/(?:best|hot|new|top|rising|controversial))?$/i.test(path);
 }
 export function isRedditFeedTitle(element: HTMLElement): boolean {
   return isRedditFeedRoute() && !!element.closest('shreddit-post,.thing.link,[data-testid="post-container"]');
