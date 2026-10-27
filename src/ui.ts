@@ -2,7 +2,7 @@ import { createLocalFontQuery, mountFontSettings } from './font-settings';
 import { isXSite, TRANSLATION_THEMES, type TranslationTheme } from './settings';
 import { mountProfileMenu, mountProfileSection } from './profile-ui';
 import { readTranslationMetrics } from './translation/metrics';
-import { OWNED } from './reddit';
+import { isRedditHomeFeedRoute, OWNED } from './reddit';
 import { normalizeSettings, type Settings } from './settings';
 export function mountControls(read: () => Settings, save: (settings: Settings) => void, clearCache: () => void, onProfileChanged?: () => void): () => void {
   const host = document.createElement('div'); host.dataset.ftOwned = 'controls'; host.hidden = true; document.body.append(host);
@@ -140,7 +140,7 @@ export function mountControls(read: () => Settings, save: (settings: Settings) =
   dialog.addEventListener('cancel', event => { event.preventDefault(); setOpen(false); });
   shadow.addEventListener('keydown', event => { if ((event as KeyboardEvent).key === 'Escape' && !panel.hidden) setOpen(false); });
   const profileMenu = mountProfileMenu(() => { onProfileChanged?.(); if (!panel.hidden) render(); });
-  // On Reddit's root feed, show a lightweight entry to the existing settings dialog.
+  // On Reddit's home feed (including sort routes), show a shortcut to the settings dialog.
   const homeShortcut = !isXSite() ? mountRedditHomeSettingsShortcut(
     () => setOpen(true), () => dialog.open,
   ) : undefined;
@@ -151,7 +151,7 @@ export function mountControls(read: () => Settings, save: (settings: Settings) =
   return () => { fontControls?.destroy(); disposeProfiles?.(); profileMenu.destroy(); if (dialog.open) dialog.close(); GM_unregisterMenuCommand(menu); GM_unregisterMenuCommand(metricsMenu); homeShortcut?.destroy(); host.remove(); };
 }
 
-/** Home-only settings shortcut, using the same dialog as the Tampermonkey menu. */
+/** Reddit home-feed settings shortcut, including sort routes. */
 function mountRedditHomeSettingsShortcut(
   openSettings: () => void,
   isDialogOpen: () => boolean,
@@ -182,8 +182,7 @@ function mountRedditHomeSettingsShortcut(
   let previousRoute = '';
   const update = (): void => {
     previousRoute = location.href;
-    button.hidden = !/(^|\.)reddit\.com$/.test(location.hostname)
-      || location.pathname !== '/' || isDialogOpen();
+    button.hidden = !isRedditHomeFeedRoute() || isDialogOpen();
   };
   // Reddit may use history.pushState without firing popstate. This observer
   // only detects URL changes; it does not scan or mutate feed content.
