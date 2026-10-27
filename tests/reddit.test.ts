@@ -1,10 +1,29 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
-import { contentIdentity, discover, sourceSnapshot } from '../src/reddit';
+import { contentIdentity, discover, feedTitleLink, isRedditFeedRoute, sourceSnapshot } from '../src/reddit';
 import { translationSectionPlans } from '../src/translation/translation-text';
 import { normalizeSettings } from '../src/settings';
 
 describe('Reddit content owners', () => {
+  it('recognizes only home and subreddit feed routes for the new switch', () => {
+    expect(isRedditFeedRoute('/', 'www.reddit.com')).toBe(true);
+    expect(isRedditFeedRoute('/r/DeepSeek/', 'reddit.com')).toBe(true);
+    expect(isRedditFeedRoute('/r/DeepSeek/new/', 'www.reddit.com')).toBe(true);
+    expect(isRedditFeedRoute('/r/all/top/', 'www.reddit.com')).toBe(true);
+    expect(isRedditFeedRoute('/r/DeepSeek/comments/abc/post/', 'www.reddit.com')).toBe(false);
+    expect(isRedditFeedRoute('/r/DeepSeek/search/', 'www.reddit.com')).toBe(false);
+    expect(isRedditFeedRoute('/', 'x.com')).toBe(false);
+  });
+  it('finds card and compact titles without unrelated headings or unsafe translated links', () => {
+    document.body.innerHTML = `<h3>Community navigation</h3>
+      <shreddit-post post-id="t3_a"><a id="post-title-t3_a" href="/r/test/comments/a/hello/"><h2>Card title</h2></a></shreddit-post>
+      <shreddit-post post-id="t3_b"><a slot="title" href="/r/test/comments/b/hello/">Compact title</a></shreddit-post>
+      <shreddit-post post-id="t3_c"><a id="post-title-t3_c" href="https://example.com/r/test/comments/c/">Untrusted title link</a></shreddit-post>`;
+    const titles = discover(document).filter(item => item.kind === 'title');
+    expect(titles.map(item => item.element.textContent)).toEqual(['Card title', 'Compact title', 'Untrusted title link']);
+    expect(feedTitleLink(titles[0]!.element)?.getAttribute('href')).toBe('/r/test/comments/a/hello/');
+    expect(feedTitleLink(titles[2]!.element)).toBeNull();
+  });
   it('excludes injected translations from link labels in source snapshots', () => {
     const source = document.createElement('div'); source.innerHTML = '<a href="https://example.com">example.com</a>';
     const before = sourceSnapshot(source).innerHTML;
