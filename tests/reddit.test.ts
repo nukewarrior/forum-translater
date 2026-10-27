@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { contentIdentity, discover, feedTitleLink, isRedditFeedRoute, sourceSnapshot } from '../src/reddit';
 import { translationSectionPlans } from '../src/translation/translation-text';
 import { normalizeSettings } from '../src/settings';
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe('Reddit content owners', () => {
   it('recognizes only home and subreddit feed routes for the new switch', () => {
@@ -33,6 +35,7 @@ describe('Reddit content owners', () => {
     expect(contentIdentity(document.querySelector<HTMLElement>('[slot="title"]')!)).toBe('t3_abc123');
   });
   it('uses post title links or permalinks instead of temporary wrapper IDs', () => {
+    vi.stubGlobal('location', { hostname: 'www.reddit.com', pathname: '/', href: 'https://www.reddit.com/' });
     document.body.innerHTML = '<shreddit-post id="virtual-card-42"><a id="post-title-t3_abc123" href="/r/test/comments/ABC123/hello/">Same English title</a></shreddit-post>';
     expect(contentIdentity(document.querySelector<HTMLElement>('a')!)).toBe('t3_abc123');
     document.body.innerHTML = '<shreddit-post id="temporary" permalink="/r/test/comments/abc123/hello/"><a slot="title">Same English title</a></shreddit-post>';
