@@ -61,7 +61,7 @@ it('links translated feed titles to Reddit posts in translation-only mode', asyn
   Observer.instances[0]?.emit(title()); await settle();
   const box = document.querySelector<HTMLElement>('span[data-ft-owned="translation"].ft-feed-title');
   expect(box?.parentElement).toBe(title());
-  expect((title() as HTMLAnchorElement).href).toBe('https://www.reddit.com/r/test/comments/first/hello/');
+  expect(title().getAttribute('href')).toBe('/r/test/comments/first/hello/');
   expect(box?.textContent).toContain('你好，世界');
   expect(title().hasAttribute('data-ft-original-hidden')).toBe(false);
   expect(title().querySelector('h1')?.hasAttribute('data-ft-original-hidden')).toBe(true);
