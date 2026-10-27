@@ -2,6 +2,8 @@ name: Branch Verification
 on:
   push:
     branches: [main, feat/multi-profile-openai-compatible, fix/x-native-layout]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 jobs:
   verify:
