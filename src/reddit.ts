@@ -5,6 +5,8 @@ const X_ARTICLE_BLOCK = '[data-block="true"],p,h1,h2,h3,h4,h5,h6,li,blockquote';
 const RULES: ReadonlyArray<readonly [Kind, string]> = [
   ['title', 'shreddit-post [slot="title"], shreddit-post h1, .thing.link > .entry a.title, [data-testid="post-container"] [data-adclicklocation="title"] h3'],
   ['title', '[data-testid="search-post-with-content-preview"] [data-testid="post-title-text"]'],
+  // Current Reddit card and compact feeds use more than one title-link shape.
+  ['title', 'shreddit-post a[id^="post-title"], shreddit-post [data-testid="post-title-text"], [data-testid="post-container"] a[id^="post-title"], [data-testid="post-container"] a[data-testid="post-title"]'],
   ['title', '[data-testid="twitterArticleTitle"], [data-testid="twitter-article-title"]'],
   // Observe article blocks separately: a whole-article owner starts every
   // paragraph at once and rebuilds the entire document on each partial result.
@@ -15,6 +17,29 @@ const RULES: ReadonlyArray<readonly [Kind, string]> = [
 ];
 const EXCLUDE = `${OWNED},[data-image-insight-host],textarea,input,[contenteditable]:not([contenteditable="false"]),[slot="credit-bar"],shreddit-ad-post`;
 export function contentSelector(kind: Kind): string { return RULES.filter(([value]) => value === kind).map(([, selector]) => selector).join(','); }
+/** Restrict the new toggle to Reddit home and community listing routes. */
+export function isRedditFeedRoute(pathname = location.pathname, hostname = location.hostname): boolean {
+  if (!/(^|\.)reddit\.com$/i.test(hostname)) return false;
+  const path = pathname.replace(/\/+$/, '') || '/';
+  return path === '/' || /^\/r\/[^/]+(?:\/(?:hot|new|top|rising|controversial))?$/i.test(path);
+}
+export function isRedditFeedTitle(element: HTMLElement): boolean {
+  return isRedditFeedRoute() && !!element.closest('shreddit-post,.thing.link,[data-testid="post-container"]');
+}
+/** Preserve native browser navigation for translated feed titles, but never clone unsafe URLs. */
+export function feedTitleLink(element: HTMLElement): HTMLAnchorElement | null {
+  const owner = element.closest('shreddit-post,.thing.link,[data-testid="post-container"]');
+  const link = (element.closest('a') || element.querySelector('a[href*="/comments/"]')
+    || owner?.querySelector('a[slot="title"],a[id^="post-title"],a[data-testid="post-title"],a.title')) as Element | null;
+  if (!(link instanceof HTMLAnchorElement)) return null;
+  const href = link.getAttribute('href');
+  if (!href) return null;
+  try {
+    const url = new URL(href, location.href);
+    if (url.origin !== new URL(location.href).origin || !/\/comments\/[a-z0-9]+/i.test(url.pathname)) return null;
+    return link;
+  } catch { return null; }
+}
 export interface Candidate { element: HTMLElement; kind: Kind }
 export function discover(root: ParentNode): Candidate[] {
   const found = new Map<HTMLElement, Kind>();
