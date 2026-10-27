@@ -1,7 +1,7 @@
 name: Branch Verification
 on:
   push:
-    branches: [main, feat/multi-profile-openai-compatible, fix/x-native-layout]
+    branches: [main, feat/multi-profile-openai-compatible, fix/x-native-layout, fix/reddit-feed-title-visibility]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -26,7 +26,7 @@ jobs:
             dist/forum-translator.user.js.build.json
           retention-days: 14
       - name: Publish verified userscript on main and approved feature branches
-        if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'feat/multi-profile-openai-compatible' || github.ref_name == 'fix/x-native-layout')
+        if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'feat/multi-profile-openai-compatible' || github.ref_name == 'fix/x-native-layout' || github.ref_name == 'fix/reddit-feed-title-visibility')
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
