@@ -3,8 +3,8 @@
 // @name:en      Forum Translator
 // @description:en Translate Reddit and X with multiple translation profiles, OpenAI-compatible APIs, and adjustable typography.
 // @namespace    sunbigfly/forum-translater
-// @version      0.3.3
-// @description  支持 Reddit 与 X 多翻译 Profile、流式 AI 翻译，保持 X 原生布局。
+// @version      0.3.4
+// @description  Reddit 首页及板块标题双语翻译，支持多翻译 Profile、跨页面缓存及 X 原生布局。
 // @homepageURL  https://github.com/nukewarrior/forum-translater
 // @supportURL   https://github.com/nukewarrior/forum-translater/issues
 // @updateURL    https://raw.githubusercontent.com/nukewarrior/forum-translater/main/dist/forum-translator.user.js
