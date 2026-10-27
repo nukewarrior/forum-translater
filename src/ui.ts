@@ -98,10 +98,12 @@ export function mountControls(read: () => Settings, save: (settings: Settings) =
     for (const [value, name] of Object.entries(TRANSLATION_THEMES)) { const option = document.createElement('option'); option.value = value; option.textContent = name; theme.append(option); }
     theme.value = current.translationTheme; themeLabel.append(theme); scope.append(themeLabel);
     input('enabled', '开启本页及后续页面自动翻译', 'checkbox', current.enabled);
-    for (const [key, label] of [['title', '帖子标题'], ['body', '帖子正文'], ['comment', '评论']] as const) {
+    for (const [key, label] of [['title', isXSite() ? '帖子标题' : '帖子详情及搜索结果标题'], ['body', '帖子正文'], ['comment', '评论']] as const) {
       const field = input(key, isXSite() && key === 'body' ? '推文、回复与引用推文' : label, 'checkbox', current[key]);
       if (isXSite() && key !== 'body' && field.parentElement) field.parentElement.hidden = true;
     }
+    const feedTitle = input('redditFeedTitle', '首页及板块列表的帖子标题', 'checkbox', current.redditFeedTitle);
+    if (isXSite() && feedTitle.parentElement) feedTitle.parentElement.hidden = true;
     input('before', '向上预加载（像素）', 'number', String(current.before));
     input('after', '向下预加载（像素）', 'number', String(current.after));
     disposeProfiles = mountProfileSection(api, () => { onProfileChanged?.(); profileMenu.refresh(); });
@@ -117,7 +119,7 @@ export function mountControls(read: () => Settings, save: (settings: Settings) =
       if (fontControls && !fontControls.valid()) { activate('fonts'); fontSection?.querySelector<HTMLInputElement>('input:invalid')?.reportValidity(); return; }
       next.fonts = fontControls?.read() ?? current.fonts;
       next.translationTheme = theme.value as TranslationTheme;
-      for (const name of ['enabled', 'title', 'body', 'comment', 'translationOnly'] as const) next[name] = (fields.get(name) as HTMLInputElement).checked;
+      for (const name of ['enabled', 'title', 'redditFeedTitle', 'body', 'comment', 'translationOnly'] as const) next[name] = (fields.get(name) as HTMLInputElement).checked;
       for (const name of ['before', 'after'] as const) next[name] = Number(fields.get(name)?.value);
       for (const field of fields.values()) {
         if (!field.matches(':disabled') && !field.checkValidity()) { activate('scope'); field.reportValidity(); return; }
