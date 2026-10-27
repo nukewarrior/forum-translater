@@ -60,6 +60,20 @@ describe('translation profile settings', () => {
     shadow.querySelector('form')?.dispatchEvent(new Event('submit', { cancelable: true }));
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ enabled: false, after: 800 }));
   });
+  it('saves the independent Reddit feed-title switch without altering detail titles', () => {
+    vi.stubGlobal('location', { hostname: 'www.reddit.com', pathname: '/', href: 'https://www.reddit.com/' });
+    const save = vi.fn();
+    destroy = mountControls(() => ({ ...DEFAULTS }), save, vi.fn());
+    const shadow = open();
+    const feed = shadow.querySelector<HTMLInputElement>('[name="redditFeedTitle"]');
+    const detail = shadow.querySelector<HTMLInputElement>('[name="title"]');
+    expect(feed?.checked).toBe(false);
+    expect(detail?.checked).toBe(true);
+    if (!feed) return;
+    feed.checked = true;
+    shadow.querySelector('form')?.dispatchEvent(new Event('submit', { cancelable: true }));
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ redditFeedTitle: true, title: true }));
+  });
   it('creates AI profiles, saves an empty API Key and activates the selected profile', () => {
     const onChanged = vi.fn();
     destroy = mountControls(() => ({ ...DEFAULTS }), vi.fn(), vi.fn(), onChanged);
