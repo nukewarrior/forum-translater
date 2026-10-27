@@ -43,7 +43,9 @@ it.each(['/', '/r/test/'])('translates wrapped feed titles on %s without observi
   document.body.innerHTML = '<shreddit-post post-id="t3_abc123"><div slot="title" class="contents" style="display:contents"><a slot="title" id="post-title-t3_abc123" href="/r/test/comments/abc123/hello/">Hello world</a></div></shreddit-post>';
   const link = title();
   const wrapper = link.parentElement!;
-  vi.spyOn(wrapper, 'getClientRects').mockReturnValue([] as unknown as DOMRectList);
+  vi.spyOn(HTMLElement.prototype, 'getClientRects').mockImplementation(function (this: HTMLElement) {
+    return (this === wrapper ? [] : [{}]) as unknown as DOMRectList;
+  });
   const translate = vi.spyOn(service, 'section').mockResolvedValue('你好，世界');
   runtime = new RedditRuntime({ ...service.settings, title: false, redditFeedTitle: true }, service);
   expect(Observer.instances[0]?.targets.has(link)).toBe(true);
