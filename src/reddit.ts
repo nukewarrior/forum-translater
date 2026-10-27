@@ -54,7 +54,11 @@ export function discover(root: ParentNode): Candidate[] {
     const elements = [...root.querySelectorAll<HTMLElement>(selector)];
     if (root instanceof HTMLElement && root.matches(selector)) elements.unshift(root);
     for (const element of elements) {
-      if (!element.closest(EXCLUDE)) found.set(element, kind);
+      // Slotted feed wrappers have no layout box and would protect the entire title link.
+      const titleLink = kind === 'title' && element.matches('shreddit-post [slot="title"]')
+        ? element.querySelector<HTMLElement>('a[slot="title"],a[id^="post-title"],a[data-testid="post-title-text"]') : null;
+      const candidate = titleLink ?? element;
+      if (!candidate.closest(EXCLUDE)) found.set(candidate, kind);
     }
   }
   // Prefer outer content owner when two supported selectors match the same text.

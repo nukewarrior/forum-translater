@@ -2,7 +2,7 @@
 
 > Reddit 与 X/Twitter 的逐段中文翻译脚本。支持 Google、Microsoft 和多个自定义 AI Profile，兼容 OpenAI Responses API 与 Chat Completions API。
 
-**版本：0.3.4（Reddit 列表标题双语翻译）** · MIT License · 基于 [sunbigfly/forum-translater](https://github.com/sunbigfly/forum-translater) 定制
+**版本：0.3.5（修复 Reddit 列表标题翻译）** · MIT License · 基于 [sunbigfly/forum-translater](https://github.com/sunbigfly/forum-translater) 定制
 
 ## 安装
 
