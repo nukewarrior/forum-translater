@@ -20,13 +20,13 @@ jobs:
       - run: npm run verify
       - uses: actions/upload-artifact@v4
         with:
-          name: forum-translator-0.3.3-userscript
+          name: forum-translator-0.3.4-userscript
           path: |
             dist/forum-translator.user.js
             dist/forum-translator.user.js.build.json
           retention-days: 14
-      - name: Commit verified userscript to feature branch
-        if: github.ref_name == 'feat/multi-profile-openai-compatible' || github.ref_name == 'fix/x-native-layout'
+      - name: Publish verified userscript on main and approved feature branches
+        if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'feat/multi-profile-openai-compatible' || github.ref_name == 'fix/x-native-layout')
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
