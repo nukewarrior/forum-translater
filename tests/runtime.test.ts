@@ -32,6 +32,35 @@ afterEach(() => { runtime?.destroy(); runtime = undefined; service.destroy(); vi
 function title(): HTMLElement { const element = document.querySelector<HTMLElement>('a[slot="title"]'); if (!element) throw new Error('Missing fixture'); return element; }
 async function settle(): Promise<void> { await vi.advanceTimersByTimeAsync(150); }
 
+it('keeps Reddit feed titles off by default while allowing detail titles independently', () => {
+  vi.stubGlobal('location', { hostname: 'www.reddit.com', pathname: '/', href: 'https://www.reddit.com/' });
+  runtime = new RedditRuntime({ ...service.settings, title: true, redditFeedTitle: false }, service);
+  expect(Observer.instances[0]?.targets.has(title())).toBe(false);
+});
+
+it('links translated feed titles to Reddit posts in translation-only mode', async () => {
+  vi.stubGlobal('location', { hostname: 'www.reddit.com', pathname: '/r/test/', href: 'https://www.reddit.com/r/test/' });
+  title().setAttribute('href', '/r/test/comments/first/hello/');
+  const translate = vi.spyOn(service, 'section').mockResolvedValue('你好，世界');
+  runtime = new RedditRuntime({ ...service.settings, title: false, redditFeedTitle: true, translationOnly: true }, service);
+  Observer.instances[0]?.emit(title()); await settle();
+  const box = document.querySelector<HTMLAnchorElement>('a[data-ft-owned="translation"].ft-feed-title');
+  expect(box?.href).toBe('https://www.reddit.com/r/test/comments/first/hello/');
+  expect(box?.textContent).toContain('你好，世界');
+  expect(title().hasAttribute('data-ft-original-hidden')).toBe(true);
+  expect(translate).toHaveBeenCalledOnce();
+});
+
+it('does not hide feed source links without a safe translated link', async () => {
+  vi.stubGlobal('location', { hostname: 'www.reddit.com', pathname: '/', href: 'https://www.reddit.com/' });
+  const translate = vi.spyOn(service, 'section').mockResolvedValue('中文译文');
+  runtime = new RedditRuntime({ ...service.settings, redditFeedTitle: true, translationOnly: true }, service);
+  Observer.instances[0]?.emit(title()); await settle();
+  expect(title().hasAttribute('data-ft-original-hidden')).toBe(false);
+  expect(document.querySelector('[data-ft-owned="translation"]')?.textContent).toContain('中文译文');
+  expect(translate).toHaveBeenCalledOnce();
+});
+
 it('retains completed background translations during a swipe and fills them once scrolling settles', async () => {
   let partial!: (text: string) => void; let finish!: (text: string) => void;
   const translate = vi.spyOn(service, 'section').mockImplementation((_text, _owner, _priority, _signal, onPartial) => {
