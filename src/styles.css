@@ -17,9 +17,9 @@
 [data-ft-owned="translation"].ft-translation-title{font-size:var(--ft-title-size,1.25em);font-weight:600;line-height:1.5}
 [data-ft-owned="translation"].ft-translation-title :is(h1,h2,h3){font-size:inherit;font-weight:inherit;line-height:inherit}
 [data-ft-owned="translation"].ft-feed-title{display:block;max-width:100%;min-width:0;margin:3px 0 7px;line-height:1.45;overflow-wrap:anywhere}
-a[data-ft-owned="translation"].ft-feed-title{color:inherit;text-decoration:none;cursor:pointer}
-a[data-ft-owned="translation"].ft-feed-title:hover{text-decoration:none}
-a[data-ft-owned="translation"].ft-feed-title:focus-visible{outline:2px solid currentColor;outline-offset:2px;border-radius:3px}
+/* The original Reddit title anchor remains the sole click target. */
+span[data-ft-owned="translation"].ft-feed-title{color:inherit;text-decoration:none;cursor:inherit}
+a:focus-visible > span[data-ft-owned="translation"].ft-feed-title{outline:2px solid currentColor;outline-offset:2px;border-radius:3px}
 
 [data-ft-duplicate]{display:none!important}
 /* HN Reader translation themes, scoped to bilingual translation boxes. */
