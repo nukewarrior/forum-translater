@@ -44,9 +44,10 @@ it('keeps English above the Chinese title in default bilingual mode', async () =
   const translate = vi.spyOn(service, 'section').mockResolvedValue('你好，世界');
   runtime = new RedditRuntime({ ...service.settings, title: false, redditFeedTitle: true, translationOnly: false }, service);
   Observer.instances[0]?.emit(title()); await settle();
-  const box = document.querySelector<HTMLAnchorElement>('a[data-ft-owned="translation"].ft-feed-title');
-  expect(box?.previousElementSibling).toBe(title());
-  expect(title().textContent).toBe('Hello world');
+  const box = document.querySelector<HTMLElement>('span[data-ft-owned="translation"].ft-feed-title');
+  expect(box?.parentElement).toBe(title());
+  expect(box?.previousElementSibling).toBe(title().querySelector('h1'));
+  expect(title().textContent).toContain('Hello world');
   expect(title().hasAttribute('data-ft-original-hidden')).toBe(false);
   expect(box?.textContent).toContain('你好，世界');
   expect(translate).toHaveBeenCalledOnce();
@@ -58,10 +59,32 @@ it('links translated feed titles to Reddit posts in translation-only mode', asyn
   const translate = vi.spyOn(service, 'section').mockResolvedValue('你好，世界');
   runtime = new RedditRuntime({ ...service.settings, title: false, redditFeedTitle: true, translationOnly: true }, service);
   Observer.instances[0]?.emit(title()); await settle();
-  const box = document.querySelector<HTMLAnchorElement>('a[data-ft-owned="translation"].ft-feed-title');
-  expect(box?.href).toBe('https://www.reddit.com/r/test/comments/first/hello/');
+  const box = document.querySelector<HTMLElement>('span[data-ft-owned="translation"].ft-feed-title');
+  expect(box?.parentElement).toBe(title());
+  expect((title() as HTMLAnchorElement).href).toBe('https://www.reddit.com/r/test/comments/first/hello/');
   expect(box?.textContent).toContain('你好，世界');
-  expect(title().hasAttribute('data-ft-original-hidden')).toBe(true);
+  expect(title().hasAttribute('data-ft-original-hidden')).toBe(false);
+  expect(title().querySelector('h1')?.hasAttribute('data-ft-original-hidden')).toBe(true);
+  expect(translate).toHaveBeenCalledOnce();
+});
+
+it('projects bilingual and translation-only titles through the original Reddit title slot', async () => {
+  vi.stubGlobal('location', { hostname: 'www.reddit.com', pathname: '/r/test/', href: 'https://www.reddit.com/r/test/' });
+  const host = document.querySelector<HTMLElement>('shreddit-post');
+  if (!host) throw new Error('Missing post');
+  const shadow = host.attachShadow({ mode: 'open' });
+  shadow.innerHTML = '<div><slot name="title"></slot></div>';
+  title().setAttribute('slot', 'title');
+  title().setAttribute('href', '/r/test/comments/first/hello/');
+  const slot = shadow.querySelector<HTMLSlotElement>('slot');
+  const translate = vi.spyOn(service, 'section').mockResolvedValue('你好，世界');
+  runtime = new RedditRuntime({ ...service.settings, title: false, redditFeedTitle: true, translationOnly: true }, service);
+  Observer.instances[0]?.emit(title()); await settle();
+  const box = title().querySelector<HTMLElement>('[data-ft-owned="translation"].ft-feed-title');
+  expect(box?.textContent).toContain('你好，世界');
+  expect(slot?.assignedElements()).toEqual([title()]);
+  expect(title().querySelector('h1')?.hasAttribute('data-ft-original-hidden')).toBe(true);
+  expect(title().hasAttribute('data-ft-original-hidden')).toBe(false);
   expect(translate).toHaveBeenCalledOnce();
 });
 
