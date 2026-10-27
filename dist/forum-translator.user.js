@@ -3,8 +3,8 @@
 // @name:en      Forum Translator
 // @description:en Translate Reddit and X with multiple translation profiles, OpenAI-compatible APIs, and adjustable typography.
 // @namespace    sunbigfly/forum-translater
-// @version      0.3.3
-// @description  支持 Reddit 与 X 多翻译 Profile、流式 AI 翻译，保持 X 原生布局。
+// @version      0.3.4
+// @description  Reddit 首页及板块标题双语翻译，支持多翻译 Profile、跨页面缓存及 X 原生布局。
 // @homepageURL  https://github.com/nukewarrior/forum-translater
 // @supportURL   https://github.com/nukewarrior/forum-translater/issues
 // @updateURL    https://raw.githubusercontent.com/nukewarrior/forum-translater/main/dist/forum-translator.user.js
@@ -44,6 +44,8 @@
   var RULES = [
     ["title", 'shreddit-post [slot="title"], shreddit-post h1, .thing.link > .entry a.title, [data-testid="post-container"] [data-adclicklocation="title"] h3'],
     ["title", '[data-testid="search-post-with-content-preview"] [data-testid="post-title-text"]'],
+    // Current Reddit card and compact feeds use more than one title-link shape.
+    ["title", 'shreddit-post a[id^="post-title"], shreddit-post [data-testid="post-title-text"], [data-testid="post-container"] a[id^="post-title"], [data-testid="post-container"] a[data-testid="post-title"]'],
     ["title", '[data-testid="twitterArticleTitle"], [data-testid="twitter-article-title"]'],
     // Observe article blocks separately: a whole-article owner starts every
     // paragraph at once and rebuilds the entire document on each partial result.
@@ -55,6 +57,34 @@
   var EXCLUDE = `${OWNED},[data-image-insight-host],textarea,input,[contenteditable]:not([contenteditable="false"]),[slot="credit-bar"],shreddit-ad-post`;
   function contentSelector(kind) {
     return RULES.filter(([value]) => value === kind).map(([, selector]) => selector).join(",");
+  }
+  function isRedditHomeFeedRoute(pathname = location.pathname, hostname = location.hostname) {
+    if (!/(^|\.)reddit\.com$/i.test(hostname)) return false;
+    const path = pathname.replace(/\/+$/, "") || "/";
+    return path === "/" || /^\/(?:best|hot|new|top|rising|popular|all)$/i.test(path);
+  }
+  function isRedditFeedRoute(pathname = location.pathname, hostname = location.hostname) {
+    if (isRedditHomeFeedRoute(pathname, hostname)) return true;
+    if (!/(^|\.)reddit\.com$/i.test(hostname)) return false;
+    const path = pathname.replace(/\/+$/, "") || "/";
+    return /^\/r\/[^/]+(?:\/(?:best|hot|new|top|rising|controversial))?$/i.test(path);
+  }
+  function isRedditFeedTitle(element) {
+    return isRedditFeedRoute() && !!element.closest('shreddit-post,.thing.link,[data-testid="post-container"]');
+  }
+  function feedTitleLink(element) {
+    const owner = element.closest('shreddit-post,.thing.link,[data-testid="post-container"]');
+    const link = element.closest("a") || element.querySelector('a[href*="/comments/"]') || owner?.querySelector('a[slot="title"],a[id^="post-title"],a[data-testid="post-title"],a.title');
+    if (!(link instanceof HTMLAnchorElement)) return null;
+    const href = link.getAttribute("href");
+    if (!href) return null;
+    try {
+      const url = new URL(href, location.href);
+      if (url.origin !== new URL(location.href).origin || !/\/comments\/[a-z0-9]+/i.test(url.pathname)) return null;
+      return link;
+    } catch {
+      return null;
+    }
   }
   function discover(root) {
     const found = /* @__PURE__ */ new Map();
@@ -128,21 +158,45 @@
   function contentIdentity(element) {
     const tweet = element.closest('article[data-testid="tweet"]');
     if (tweet) {
-      const href2 = tweet.querySelector("time")?.closest("a")?.getAttribute("href") ?? "";
-      const id2 = /\/status\/(\d+)(?:[/?#]|$)/.exec(href2)?.[1];
-      if (id2) return `x:status:${id2}`;
-      if (href2) return href2;
+      const href = tweet.querySelector("time")?.closest("a")?.getAttribute("href") ?? "";
+      const id = /\/status\/(\d+)(?:[/?#]|$)/.exec(href)?.[1];
+      if (id) return `x:status:${id}`;
+      if (href) return href;
     }
     if (element.closest('[data-testid="twitterArticleReadView"],[data-testid="twitterArticleTitle"],[data-testid="twitter-article-title"],[data-testid="twitterArticleRichTextView"],[data-testid="longformRichTextComponent"]') && /(^|\.)(x|twitter)\.com$/.test(location.hostname)) {
-      const id2 = /^\/[^/]+\/(?:status|article)\/(\d+)(?:\/|$)/.exec(location.pathname)?.[1];
-      if (id2) return `x:status:${id2}`;
+      const id = /^\/[^/]+\/(?:status|article)\/(\d+)(?:\/|$)/.exec(location.pathname)?.[1];
+      if (id) return `x:status:${id}`;
     }
     const owner = element.closest('shreddit-comment,shreddit-post,.thing,[data-testid="post-container"],[data-testid="search-post-with-content-preview"],[data-testid="comment"]');
-    const identity = owner?.getAttribute("thingid") ?? owner?.getAttribute("post-id") ?? owner?.getAttribute("id");
-    if (identity) return identity;
-    const href = owner?.querySelector('[data-testid="post-title-text"]')?.getAttribute("href") ?? "";
-    const id = /\/comments\/([a-z0-9]+)(?:[/?#]|$)/i.exec(href)?.[1];
-    return id ? `t3_${id}` : "";
+    if (!owner) return "";
+    const comment = owner.matches('shreddit-comment,.thing.comment,[data-testid="comment"]');
+    const prefix = comment ? "t1_" : "t3_";
+    for (const name of ["thingid", "data-fullname", "post-id", "data-post-id", "id"]) {
+      const value = owner.getAttribute(name)?.trim() ?? "";
+      const match = /^t([13])_([a-z0-9]+)$/i.exec(value);
+      if (match && match[1] === (comment ? "1" : "3")) return prefix + match[2].toLowerCase();
+      if (!comment && (name === "post-id" || name === "data-post-id") && /^[a-z0-9]+$/i.test(value)) return "t3_" + value.toLowerCase();
+    }
+    if (comment) return owner.getAttribute("id") ?? "";
+    const urls = [
+      owner.getAttribute("permalink"),
+      owner.getAttribute("content-href"),
+      element.closest("a")?.getAttribute("href"),
+      ...[...owner.querySelectorAll(
+        'a[slot="title"][href],a[id^="post-title"][href],a[data-testid="post-title-text"][href],a[data-testid="post-title"][href],a.title[href],a[href*="/comments/"]'
+      )].map((link) => link.getAttribute("href"))
+    ];
+    for (const href of urls) {
+      if (!href) continue;
+      try {
+        const url = new URL(href, location.href);
+        if (!/(^|\.)reddit\.com$/i.test(url.hostname)) continue;
+        const match = /\/comments\/([a-z0-9]+)(?:\/|$)/i.exec(url.pathname);
+        if (match) return "t3_" + match[1].toLowerCase();
+      } catch {
+      }
+    }
+    return "";
   }
 
   // src/fonts.ts
@@ -350,7 +404,7 @@
 
   // src/settings.ts
   var TRANSLATION_THEMES = { quote: "淡灰引用", plain: "自然正文", weakening: "弱化译文", "dividing-line": "分隔线", underline: "下划线", highlight: "柔和高亮", paper: "纸张卡片" };
-  var DEFAULTS = { fonts: DEFAULT_FONTS, translationTheme: "quote", translationOnly: false, enabled: true, title: true, body: true, comment: true, before: 600, after: 1200, provider: "google", ai: { baseUrl: "", apiKey: "", model: "", prompt: "", requestsPerMinute: 30, tokensPerMinute: 0, reasoningEffort: "low", fastMode: false, protocol: "responses" } };
+  var DEFAULTS = { fonts: DEFAULT_FONTS, translationTheme: "quote", translationOnly: false, enabled: true, title: true, redditFeedTitle: false, body: true, comment: true, before: 600, after: 1200, provider: "google", ai: { baseUrl: "", apiKey: "", model: "", prompt: "", requestsPerMinute: 30, tokensPerMinute: 0, reasoningEffort: "low", fastMode: false, protocol: "responses" } };
   function normalizeSettings(raw) {
     const value = { ...DEFAULTS, fonts: normalizeFonts(raw.fonts), ai: { ...DEFAULTS.ai } };
     value.ai.reasoningEffort = raw.ai?.reasoningEffort === "none" ? "none" : raw.ai?.reasoningEffort === "auto" ? "auto" : "low";
@@ -361,7 +415,7 @@
       const number = raw.ai?.[key];
       if (typeof number === "number" && Number.isFinite(number)) value.ai[key] = Math.max(key === "requestsPerMinute" ? 1 : 0, Math.min(1e6, Math.round(number)));
     }
-    for (const key of ["enabled", "title", "body", "comment", "translationOnly"]) if (typeof raw[key] === "boolean") value[key] = raw[key];
+    for (const key of ["enabled", "title", "redditFeedTitle", "body", "comment", "translationOnly"]) if (typeof raw[key] === "boolean") value[key] = raw[key];
     for (const key of ["before", "after"]) {
       const number = raw[key];
       if (typeof number === "number" && Number.isFinite(number)) value[key] = Math.min(5e3, Math.max(0, Math.round(number)));
@@ -2534,7 +2588,8 @@
         for (const candidate of discover(root)) {
           if (isInactiveXBackground(candidate.element)) continue;
           const { kind } = candidate;
-          if (!this.settings[kind]) continue;
+          const feedTitle = kind === "title" && isRedditFeedTitle(candidate.element);
+          if (feedTitle ? !this.settings.redditFeedTitle : !this.settings[kind]) continue;
           const known = this.entries.get(candidate.element);
           if (known && known.sourceSignature === known.signature && known.identity === contentIdentity(candidate.element) && !/^zh(?:-|$)/i.test(candidate.element.lang) && (known.state !== "done" || known.box?.isConnected)) {
             if (known.state !== "done") {
@@ -2573,6 +2628,7 @@
           const entry = {
             element,
             kind,
+            feedTitle,
             box: null,
             controller: null,
             near: sameContent ? existing.near : false,
@@ -2681,9 +2737,15 @@
       const rendered = /* @__PURE__ */ new Map();
       let renderedState;
       let sectionRenderer;
-      const box = document.createElement("div");
+      const nativeLink = entry.feedTitle ? feedTitleLink(entry.element) : null;
+      const box = nativeLink ? document.createElement("a") : document.createElement("div");
       box.dataset.ftOwned = "translation";
-      box.className = `ft-translation${this.translationOnly ? " ft-translation-only" : ""}${entry.kind === "title" ? " ft-translation-title" : ""}`;
+      box.className = `ft-translation${this.translationOnly ? " ft-translation-only" : ""}${entry.kind === "title" ? " ft-translation-title" : ""}${entry.feedTitle ? " ft-feed-title" : ""}`;
+      if (nativeLink && box instanceof HTMLAnchorElement) {
+        box.href = new URL(nativeLink.getAttribute("href") ?? "", location.href).href;
+        if (nativeLink.target) box.target = nativeLink.target;
+        box.rel = "noopener noreferrer";
+      }
       if (entry.kind === "title") {
         const title = entry.element.querySelector("h1,h2,h3") ?? entry.element;
         const size = Number.parseFloat(getComputedStyle(title).fontSize);
@@ -2785,9 +2847,12 @@
         if (renderedState === stamp) return;
         renderedState = stamp;
         box.toggleAttribute("data-ft-streaming", streaming.size > 0);
-        if (this.translationOnly && pending.size === 0 && failed.size === 0) entry.originals.hide(entry.element);
+        if (this.translationOnly && pending.size === 0 && failed.size === 0 && (!entry.feedTitle || box instanceof HTMLAnchorElement)) entry.originals.hide(entry.element);
         sectionRenderer ??= new TranslationSectionsRenderer(snapshot, box);
         sectionRenderer.render(translations, { pending, failed, streaming });
+        if (box instanceof HTMLAnchorElement) {
+          for (const nested of box.querySelectorAll("a")) nested.replaceWith(...nested.childNodes);
+        }
         for (const status of box.querySelectorAll(':scope > [data-ft-owned="translation-status"]')) status.remove();
         if (failed.size) {
           const reason = document.createElement("span");
@@ -3695,10 +3760,12 @@
       themeLabel.append(theme);
       scope.append(themeLabel);
       input("enabled", "开启本页及后续页面自动翻译", "checkbox", current.enabled);
-      for (const [key, label] of [["title", "帖子标题"], ["body", "帖子正文"], ["comment", "评论"]]) {
+      for (const [key, label] of [["title", isXSite() ? "帖子标题" : "帖子详情及搜索结果标题"], ["body", "帖子正文"], ["comment", "评论"]]) {
         const field = input(key, isXSite() && key === "body" ? "推文、回复与引用推文" : label, "checkbox", current[key]);
         if (isXSite() && key !== "body" && field.parentElement) field.parentElement.hidden = true;
       }
+      const feedTitle = input("redditFeedTitle", "首页及板块列表的帖子标题", "checkbox", current.redditFeedTitle);
+      if (isXSite() && feedTitle.parentElement) feedTitle.parentElement.hidden = true;
       input("before", "向上预加载（像素）", "number", String(current.before));
       input("after", "向下预加载（像素）", "number", String(current.after));
       disposeProfiles = mountProfileSection(api, () => {
@@ -3744,7 +3811,7 @@
         }
         next.fonts = fontControls?.read() ?? current.fonts;
         next.translationTheme = theme.value;
-        for (const name of ["enabled", "title", "body", "comment", "translationOnly"]) next[name] = fields.get(name).checked;
+        for (const name of ["enabled", "title", "redditFeedTitle", "body", "comment", "translationOnly"]) next[name] = fields.get(name).checked;
         for (const name of ["before", "after"]) next[name] = Number(fields.get(name)?.value);
         for (const field of fields.values()) {
           if (!field.matches(":disabled") && !field.checkValidity()) {
@@ -3837,7 +3904,7 @@
     let previousRoute = "";
     const update = () => {
       previousRoute = location.href;
-      button.hidden = !/(^|\.)reddit\.com$/.test(location.hostname) || location.pathname !== "/" || isDialogOpen();
+      button.hidden = !isRedditHomeFeedRoute() || isDialogOpen();
     };
     const observer = new MutationObserver(() => {
       if (location.href !== previousRoute) update();
@@ -4208,6 +4275,10 @@
 [data-ft-owned="translation"].ft-translation-only{border-inline-start:0;padding:0;margin:8px 0 12px}
 [data-ft-owned="translation"].ft-translation-title{font-size:var(--ft-title-size,1.25em);font-weight:600;line-height:1.5}
 [data-ft-owned="translation"].ft-translation-title :is(h1,h2,h3){font-size:inherit;font-weight:inherit;line-height:inherit}
+[data-ft-owned="translation"].ft-feed-title{display:block;max-width:100%;min-width:0;margin:3px 0 7px;line-height:1.45;overflow-wrap:anywhere}
+a[data-ft-owned="translation"].ft-feed-title{color:inherit;text-decoration:none;cursor:pointer}
+a[data-ft-owned="translation"].ft-feed-title:hover{text-decoration:none}
+a[data-ft-owned="translation"].ft-feed-title:focus-visible{outline:2px solid currentColor;outline-offset:2px;border-radius:3px}
 
 [data-ft-duplicate]{display:none!important}
 /* HN Reader translation themes, scoped to bilingual translation boxes. */
