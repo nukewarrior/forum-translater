@@ -3,7 +3,7 @@
 // @name:en      Forum Translator
 // @description:en Translate Reddit and X with multiple translation profiles, OpenAI-compatible APIs, and adjustable typography.
 // @namespace    sunbigfly/forum-translater
-// @version      0.3.4
+// @version      0.3.5
 // @description  Reddit 首页及板块标题双语翻译，支持多翻译 Profile、跨页面缓存及 X 原生布局。
 // @homepageURL  https://github.com/nukewarrior/forum-translater
 // @supportURL   https://github.com/nukewarrior/forum-translater/issues
@@ -2738,14 +2738,10 @@
       let renderedState;
       let sectionRenderer;
       const nativeLink = entry.feedTitle ? feedTitleLink(entry.element) : null;
-      const box = nativeLink ? document.createElement("a") : document.createElement("div");
+      const embeddedFeedTitle = !!nativeLink && (nativeLink === entry.element || nativeLink.contains(entry.element) || entry.element.contains(nativeLink));
+      const box = embeddedFeedTitle ? document.createElement("span") : document.createElement("div");
       box.dataset.ftOwned = "translation";
       box.className = `ft-translation${this.translationOnly ? " ft-translation-only" : ""}${entry.kind === "title" ? " ft-translation-title" : ""}${entry.feedTitle ? " ft-feed-title" : ""}`;
-      if (nativeLink && box instanceof HTMLAnchorElement) {
-        box.href = new URL(nativeLink.getAttribute("href") ?? "", location.href).href;
-        if (nativeLink.target) box.target = nativeLink.target;
-        box.rel = "noopener noreferrer";
-      }
       if (entry.kind === "title") {
         const title = entry.element.querySelector("h1,h2,h3") ?? entry.element;
         const size = Number.parseFloat(getComputedStyle(title).fontSize);
@@ -2756,12 +2752,15 @@
       box.dataset.ftFont = entry.kind === "title" || entry.element.matches("h1,h2,h3,h4,h5,h6") ? "title" : "body";
       box.lang = "zh-CN";
       box.setAttribute("aria-label", "中文翻译");
-      const anchor = entry.element.closest("a");
-      const insertionAnchor = anchor ?? entry.element;
-      const slot = insertionAnchor.getAttribute("slot");
-      if (slot !== null) box.setAttribute("slot", slot);
-      if (!anchor && entry.element.matches("li,td,th")) entry.element.append(box);
-      else insertionAnchor.after(box);
+      if (embeddedFeedTitle && nativeLink) nativeLink.append(box);
+      else {
+        const anchor = entry.element.closest("a");
+        const insertionAnchor = anchor ?? entry.element;
+        const slot = insertionAnchor.getAttribute("slot");
+        if (slot !== null) box.setAttribute("slot", slot);
+        if (!anchor && entry.element.matches("li,td,th")) entry.element.append(box);
+        else insertionAnchor.after(box);
+      }
       entry.box?.remove();
       entry.box = box;
       for (const item of entry.inlineBoxes) item.remove();
@@ -2847,10 +2846,10 @@
         if (renderedState === stamp) return;
         renderedState = stamp;
         box.toggleAttribute("data-ft-streaming", streaming.size > 0);
-        if (this.translationOnly && pending.size === 0 && failed.size === 0 && (!entry.feedTitle || box instanceof HTMLAnchorElement)) entry.originals.hide(entry.element);
+        if (this.translationOnly && pending.size === 0 && failed.size === 0 && (!entry.feedTitle || embeddedFeedTitle)) entry.originals.hide(entry.element);
         sectionRenderer ??= new TranslationSectionsRenderer(snapshot, box);
         sectionRenderer.render(translations, { pending, failed, streaming });
-        if (box instanceof HTMLAnchorElement) {
+        if (embeddedFeedTitle) {
           for (const nested of box.querySelectorAll("a")) nested.replaceWith(...nested.childNodes);
         }
         for (const status of box.querySelectorAll(':scope > [data-ft-owned="translation-status"]')) status.remove();
@@ -2862,13 +2861,15 @@
           reason.textContent = [...new Set(failureReasons.values())].join("；");
           box.append(reason);
         }
-        if (entry.kind === "title" && pending.size === 0 && failed.size === 0) this.tabTitle.update(snapshot.textContent ?? "", box.textContent ?? "");
+        if (entry.kind === "title" && !entry.feedTitle && pending.size === 0 && failed.size === 0) this.tabTitle.update(snapshot.textContent ?? "", box.textContent ?? "");
         if (failed.size) {
           const retry = document.createElement("button");
           retry.dataset.ftOwned = "translation-status";
           retry.type = "button";
           retry.textContent = "翻译失败 · 点击重试";
-          retry.onclick = () => {
+          retry.onclick = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
             for (const index of [...failed]) void run(index, true);
           };
           box.append(retry);
@@ -4276,9 +4277,9 @@
 [data-ft-owned="translation"].ft-translation-title{font-size:var(--ft-title-size,1.25em);font-weight:600;line-height:1.5}
 [data-ft-owned="translation"].ft-translation-title :is(h1,h2,h3){font-size:inherit;font-weight:inherit;line-height:inherit}
 [data-ft-owned="translation"].ft-feed-title{display:block;max-width:100%;min-width:0;margin:3px 0 7px;line-height:1.45;overflow-wrap:anywhere}
-a[data-ft-owned="translation"].ft-feed-title{color:inherit;text-decoration:none;cursor:pointer}
-a[data-ft-owned="translation"].ft-feed-title:hover{text-decoration:none}
-a[data-ft-owned="translation"].ft-feed-title:focus-visible{outline:2px solid currentColor;outline-offset:2px;border-radius:3px}
+/* The original Reddit title anchor remains the sole click target. */
+span[data-ft-owned="translation"].ft-feed-title{color:inherit;text-decoration:none;cursor:inherit}
+a:focus-visible > span[data-ft-owned="translation"].ft-feed-title{outline:2px solid currentColor;outline-offset:2px;border-radius:3px}
 
 [data-ft-duplicate]{display:none!important}
 /* HN Reader translation themes, scoped to bilingual translation boxes. */
