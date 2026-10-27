@@ -38,6 +38,20 @@ it('keeps Reddit feed titles off by default while allowing detail titles indepen
   expect(Observer.instances[0]?.targets.has(title())).toBe(false);
 });
 
+it('keeps English above the Chinese title in default bilingual mode', async () => {
+  vi.stubGlobal('location', { hostname: 'www.reddit.com', pathname: '/', href: 'https://www.reddit.com/' });
+  title().setAttribute('href', '/r/test/comments/first/hello/');
+  const translate = vi.spyOn(service, 'section').mockResolvedValue('你好，世界');
+  runtime = new RedditRuntime({ ...service.settings, title: false, redditFeedTitle: true, translationOnly: false }, service);
+  Observer.instances[0]?.emit(title()); await settle();
+  const box = document.querySelector<HTMLAnchorElement>('a[data-ft-owned="translation"].ft-feed-title');
+  expect(box?.previousElementSibling).toBe(title());
+  expect(title().textContent).toBe('Hello world');
+  expect(title().hasAttribute('data-ft-original-hidden')).toBe(false);
+  expect(box?.textContent).toContain('你好，世界');
+  expect(translate).toHaveBeenCalledOnce();
+});
+
 it('links translated feed titles to Reddit posts in translation-only mode', async () => {
   vi.stubGlobal('location', { hostname: 'www.reddit.com', pathname: '/r/test/', href: 'https://www.reddit.com/r/test/' });
   title().setAttribute('href', '/r/test/comments/first/hello/');
