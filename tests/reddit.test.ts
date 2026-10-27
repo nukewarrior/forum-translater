@@ -40,6 +40,14 @@ describe('Reddit content owners', () => {
     expect(card && feedTitleLink(card.element)?.getAttribute('href')).toBe('/r/test/comments/a/hello/');
     expect(unsafe && feedTitleLink(unsafe.element)).toBeNull();
   });
+  it('uses the title link inside a slotted feed wrapper as the translatable owner', () => {
+    document.body.innerHTML = '<shreddit-post post-id="t3_abc123"><div slot="title" class="contents"><a slot="title" id="post-title-t3_abc123" href="/r/test/comments/abc123/hello/">Hello world</a></div></shreddit-post>';
+    const link = document.querySelector<HTMLElement>('a')!;
+    const wrapper = link.parentElement!;
+    expect(discover(document)).toEqual([{ element: link, kind: 'title' }]);
+    expect(discover(wrapper)).toEqual([{ element: link, kind: 'title' }]);
+    expect(translationSectionPlans(sourceSnapshot(link)).map(plan => plan.text)).toEqual(['Hello world']);
+  });
   it('normalizes Reddit post IDs across list and detail markup', () => {
     document.body.innerHTML = '<shreddit-post id="virtual-row" post-id="ABC123"><a id="post-title-t3_abc123" href="/r/test/comments/abc123/hello/"><h2>Same English title</h2></a></shreddit-post>';
     expect(contentIdentity(document.querySelector<HTMLElement>('a')!)).toBe('t3_abc123');

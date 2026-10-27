@@ -3,7 +3,8 @@ export const OWNED = '[data-ft-owned]';
 const X_ARTICLE = '[data-testid="twitterArticleRichTextView"],[data-testid="longformRichTextComponent"]';
 const X_ARTICLE_BLOCK = '[data-block="true"],p,h1,h2,h3,h4,h5,h6,li,blockquote';
 const RULES: ReadonlyArray<readonly [Kind, string]> = [
-  ['title', 'shreddit-post [slot="title"], shreddit-post h1, .thing.link > .entry a.title, [data-testid="post-container"] [data-adclicklocation="title"] h3'],
+  // Slotted feed wrappers can be display: contents; snapshot and observe the title link instead.
+  ['title', 'shreddit-post [slot="title"]:not(:has(a[slot="title"],a[id^="post-title"],a[data-testid="post-title-text"])), shreddit-post h1, .thing.link > .entry a.title, [data-testid="post-container"] [data-adclicklocation="title"] h3'],
   ['title', '[data-testid="search-post-with-content-preview"] [data-testid="post-title-text"]'],
   // Current Reddit card and compact feeds use more than one title-link shape.
   ['title', 'shreddit-post a[id^="post-title"], shreddit-post [data-testid="post-title-text"], [data-testid="post-container"] a[id^="post-title"], [data-testid="post-container"] a[data-testid="post-title"]'],

@@ -38,6 +38,24 @@ it('keeps Reddit feed titles off by default while allowing detail titles indepen
   expect(Observer.instances[0]?.targets.has(title())).toBe(false);
 });
 
+it.each(['/', '/r/test/'])('translates wrapped feed titles on %s without observing the layoutless wrapper', async pathname => {
+  vi.stubGlobal('location', { hostname: 'www.reddit.com', pathname, href: 'https://www.reddit.com' + pathname });
+  document.body.innerHTML = '<shreddit-post post-id="t3_abc123"><div slot="title" class="contents" style="display:contents"><a slot="title" id="post-title-t3_abc123" href="/r/test/comments/abc123/hello/">Hello world</a></div></shreddit-post>';
+  const link = title();
+  const wrapper = link.parentElement!;
+  vi.spyOn(wrapper, 'getClientRects').mockReturnValue([] as unknown as DOMRectList);
+  const translate = vi.spyOn(service, 'section').mockResolvedValue('你好，世界');
+  runtime = new RedditRuntime({ ...service.settings, title: false, redditFeedTitle: true }, service);
+  expect(Observer.instances[0]?.targets.has(link)).toBe(true);
+  expect(Observer.instances[0]?.targets.has(wrapper)).toBe(false);
+  Observer.instances[0]?.emit(link); await settle();
+  const box = wrapper.querySelector<HTMLAnchorElement>('a[data-ft-owned="translation"].ft-feed-title');
+  expect(box?.previousElementSibling).toBe(link);
+  expect(box?.href).toBe('https://www.reddit.com/r/test/comments/abc123/hello/');
+  expect(box?.textContent).toContain('你好，世界');
+  expect(translate).toHaveBeenCalledOnce();
+});
+
 it('keeps English above the Chinese title in default bilingual mode', async () => {
   vi.stubGlobal('location', { hostname: 'www.reddit.com', pathname: '/', href: 'https://www.reddit.com/' });
   title().setAttribute('href', '/r/test/comments/first/hello/');
