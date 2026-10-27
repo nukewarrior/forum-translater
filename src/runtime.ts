@@ -292,14 +292,14 @@ export class RedditRuntime {
     let renderedState: string | undefined;
     let sectionRenderer: TranslationSectionsRenderer | undefined;
     const nativeLink = entry.feedTitle ? feedTitleLink(entry.element) : null;
-    const box: HTMLElement = nativeLink ? document.createElement('a') : document.createElement('div');
+    // Reddit renders [slot="title"] through its own component. A *second*
+    // sibling assigned to that slot can be silently ignored or hidden by the
+    // host layout. Put the translation INSIDE the existing title link instead:
+    // it remains in the native title slot and the whole bilingual label opens
+    // the same post without creating a competing anchor.
+    const embeddedFeedTitle = !!nativeLink && (nativeLink === entry.element || nativeLink.contains(entry.element) || entry.element.contains(nativeLink));
+    const box: HTMLElement = embeddedFeedTitle ? document.createElement('span') : document.createElement('div');
     box.dataset.ftOwned = 'translation'; box.className = `ft-translation${this.translationOnly ? ' ft-translation-only' : ''}${entry.kind === 'title' ? ' ft-translation-title' : ''}${entry.feedTitle ? ' ft-feed-title' : ''}`;
-    if (nativeLink && box instanceof HTMLAnchorElement) {
-      // Preserve native browser navigation, including Cmd/Ctrl-click and keyboard actions.
-      box.href = new URL(nativeLink.getAttribute('href') ?? '', location.href).href;
-      if (nativeLink.target) box.target = nativeLink.target;
-      box.rel = 'noopener noreferrer';
-    }
     if (entry.kind === 'title') {
       const title = entry.element.querySelector('h1,h2,h3') ?? entry.element;
       const size = Number.parseFloat(getComputedStyle(title).fontSize);
@@ -309,13 +309,17 @@ export class RedditRuntime {
     box.dataset.translationTheme = this.settings.translationTheme;
     box.dataset.ftFont = entry.kind === 'title' || entry.element.matches('h1,h2,h3,h4,h5,h6') ? 'title' : 'body';
     box.lang = 'zh-CN'; box.setAttribute('aria-label', '中文翻译');
-    // Keep translations outside clickable title links without replacing host content.
-    const anchor = entry.element.closest('a');
-    const insertionAnchor = anchor ?? entry.element;
-    const slot = insertionAnchor.getAttribute('slot');
-    if (slot !== null) box.setAttribute('slot', slot);
-    if (!anchor && entry.element.matches('li,td,th')) entry.element.append(box);
-    else insertionAnchor.after(box);
+    // Reuse the original title link/slot. Never add another [slot="title"]
+    // element: some Reddit card and compact layouts only render the first one.
+    if (embeddedFeedTitle && nativeLink) nativeLink.append(box);
+    else {
+      const anchor = entry.element.closest('a');
+      const insertionAnchor = anchor ?? entry.element;
+      const slot = insertionAnchor.getAttribute('slot');
+      if (slot !== null) box.setAttribute('slot', slot);
+      if (!anchor && entry.element.matches('li,td,th')) entry.element.append(box);
+      else insertionAnchor.after(box);
+    }
     entry.box?.remove(); entry.box = box;
     for (const item of entry.inlineBoxes) item.remove(); entry.inlineBoxes = [];
     const placements = plans.map(plan => {
@@ -381,11 +385,11 @@ export class RedditRuntime {
       box.toggleAttribute('data-ft-streaming', streaming.size > 0);
       // Without a safe post link, keep the original clickable title visible.
       if (this.translationOnly && pending.size === 0 && failed.size === 0
-        && (!entry.feedTitle || box instanceof HTMLAnchorElement)) entry.originals.hide(entry.element);
+        && (!entry.feedTitle || embeddedFeedTitle)) entry.originals.hide(entry.element);
       sectionRenderer ??= new TranslationSectionsRenderer(snapshot, box);
       sectionRenderer.render(translations, { pending, failed, streaming });
       // Avoid invalid nested interactive links inside the translated title link.
-      if (box instanceof HTMLAnchorElement) {
+      if (embeddedFeedTitle) {
         for (const nested of box.querySelectorAll('a')) nested.replaceWith(...nested.childNodes);
       }
       for (const status of box.querySelectorAll(':scope > [data-ft-owned="translation-status"]')) status.remove();
@@ -393,8 +397,8 @@ export class RedditRuntime {
         const reason = document.createElement('span'); reason.dataset.ftOwned = 'translation-status'; reason.className = 'hnr-translation-failure'; reason.setAttribute('role', 'status');
         reason.textContent = [...new Set(failureReasons.values())].join('；'); box.append(reason);
       }
-      if (entry.kind === 'title' && pending.size === 0 && failed.size === 0) this.tabTitle.update(snapshot.textContent ?? '', box.textContent ?? '');
-      if (failed.size) { const retry = document.createElement('button'); retry.dataset.ftOwned = 'translation-status'; retry.type = 'button'; retry.textContent = '翻译失败 · 点击重试'; retry.onclick = () => { for (const index of [...failed]) void run(index, true); }; box.append(retry); }
+      if (entry.kind === 'title' && !entry.feedTitle && pending.size === 0 && failed.size === 0) this.tabTitle.update(snapshot.textContent ?? '', box.textContent ?? '');
+      if (failed.size) { const retry = document.createElement('button'); retry.dataset.ftOwned = 'translation-status'; retry.type = 'button'; retry.textContent = '翻译失败 · 点击重试'; retry.onclick = event => { event.preventDefault(); event.stopPropagation(); for (const index of [...failed]) void run(index, true); }; box.append(retry); }
     };
     const priority = entry.visible ? 'visible' : manual ? 'interactive' : 'prefetch';
     const run = async (index: number, retry = false): Promise<void> => {
