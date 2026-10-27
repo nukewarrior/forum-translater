@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { contentIdentity, discover, feedTitleLink, isRedditFeedRoute, sourceSnapshot } from '../src/reddit';
+import { contentIdentity, discover, feedTitleLink, isRedditFeedRoute, isRedditHomeFeedRoute, sourceSnapshot } from '../src/reddit';
 import { translationSectionPlans } from '../src/translation/translation-text';
 import { normalizeSettings } from '../src/settings';
 
@@ -9,8 +9,20 @@ afterEach(() => vi.unstubAllGlobals());
 describe('Reddit content owners', () => {
   it('recognizes only home and subreddit feed routes for the new switch', () => {
     expect(isRedditFeedRoute('/', 'www.reddit.com')).toBe(true);
+    for (const homePath of ['/', '/best/', '/hot/', '/new/', '/top/', '/rising/', '/popular/', '/all/']) {
+      expect(isRedditHomeFeedRoute(homePath, 'www.reddit.com')).toBe(true);
+      expect(isRedditFeedRoute(homePath, 'www.reddit.com')).toBe(true);
+    }
+    expect(isRedditHomeFeedRoute('/r/DeepSeek/', 'www.reddit.com')).toBe(false);
+    expect(isRedditHomeFeedRoute('/best/', 'x.com')).toBe(false);
+    expect(isRedditFeedRoute('/user/example/', 'www.reddit.com')).toBe(false);
+    expect(isRedditFeedRoute('/settings/', 'www.reddit.com')).toBe(false);
     expect(isRedditFeedRoute('/r/DeepSeek/', 'reddit.com')).toBe(true);
     expect(isRedditFeedRoute('/r/DeepSeek/new/', 'www.reddit.com')).toBe(true);
+    expect(isRedditFeedRoute('/r/DeepSeek/best/', 'www.reddit.com')).toBe(true);
+    expect(isRedditFeedRoute('/r/DeepSeek/hot/', 'www.reddit.com')).toBe(true);
+    expect(isRedditFeedRoute('/r/DeepSeek/top/', 'www.reddit.com')).toBe(true);
+    expect(isRedditFeedRoute('/r/DeepSeek/rising/', 'www.reddit.com')).toBe(true);
     expect(isRedditFeedRoute('/r/all/top/', 'www.reddit.com')).toBe(true);
     expect(isRedditFeedRoute('/r/DeepSeek/comments/abc/post/', 'www.reddit.com')).toBe(false);
     expect(isRedditFeedRoute('/r/DeepSeek/search/', 'www.reddit.com')).toBe(false);
