@@ -26,6 +26,25 @@ describe('Reddit content owners', () => {
     expect(card && feedTitleLink(card.element)?.getAttribute('href')).toBe('/r/test/comments/a/hello/');
     expect(unsafe && feedTitleLink(unsafe.element)).toBeNull();
   });
+  it('normalizes Reddit post IDs across list and detail markup', () => {
+    document.body.innerHTML = '<shreddit-post id="virtual-row" post-id="ABC123"><a id="post-title-t3_abc123" href="/r/test/comments/abc123/hello/"><h2>Same English title</h2></a></shreddit-post>';
+    expect(contentIdentity(document.querySelector<HTMLElement>('a')!)).toBe('t3_abc123');
+    document.body.innerHTML = '<shreddit-post thingid="t3_abc123"><a slot="title"><h1>Same English title</h1></a></shreddit-post>';
+    expect(contentIdentity(document.querySelector<HTMLElement>('[slot="title"]')!)).toBe('t3_abc123');
+  });
+  it('uses post title links or permalinks instead of temporary wrapper IDs', () => {
+    document.body.innerHTML = '<shreddit-post id="virtual-card-42"><a id="post-title-t3_abc123" href="/r/test/comments/ABC123/hello/">Same English title</a></shreddit-post>';
+    expect(contentIdentity(document.querySelector<HTMLElement>('a')!)).toBe('t3_abc123');
+    document.body.innerHTML = '<shreddit-post id="temporary" permalink="/r/test/comments/abc123/hello/"><a slot="title">Same English title</a></shreddit-post>';
+    expect(contentIdentity(document.querySelector<HTMLElement>('a')!)).toBe('t3_abc123');
+    document.body.innerHTML = '<shreddit-post id="temporary"><a slot="title" href="https://example.com/r/test/comments/abc123/">External link</a></shreddit-post>';
+    expect(contentIdentity(document.querySelector<HTMLElement>('a')!)).toBe('');
+  });
+  it('does not confuse comments or other posts with the same title', () => {
+    document.body.innerHTML = '<shreddit-comment thingid="t1_AbC"><div slot="comment">Comment</div></shreddit-comment><shreddit-post post-id="zzz123"><a slot="title">Same English title</a></shreddit-post>';
+    expect(contentIdentity(document.querySelector<HTMLElement>('[slot="comment"]')!)).toBe('t1_abc');
+    expect(contentIdentity(document.querySelector<HTMLElement>('[slot="title"]')!)).toBe('t3_zzz123');
+  });
   it('excludes injected translations from link labels in source snapshots', () => {
     const source = document.createElement('div'); source.innerHTML = '<a href="https://example.com">example.com</a>';
     const before = sourceSnapshot(source).innerHTML;
