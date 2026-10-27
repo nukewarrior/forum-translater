@@ -72,6 +72,7 @@ describe('Reddit content owners', () => {
     expect(discover(document).map(item => item.kind)).toEqual(['title', 'body', 'comment']);
   });
   it('finds current Reddit search result titles and previews without the full-card accessibility link', () => {
+    vi.stubGlobal('location', { hostname: 'www.reddit.com', pathname: '/search/', href: 'https://www.reddit.com/search/' });
     document.body.innerHTML = `<div data-testid="search-post-with-content-preview">
       <h2><a data-testid="post-title" href="/r/test/comments/abc/search-result/"><span>Search result title</span></a></h2>
       <div data-testid="sdui-post-unit">
