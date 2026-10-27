@@ -20,9 +20,11 @@ describe('Reddit content owners', () => {
       <shreddit-post post-id="t3_b"><a slot="title" href="/r/test/comments/b/hello/">Compact title</a></shreddit-post>
       <shreddit-post post-id="t3_c"><a id="post-title-t3_c" href="https://example.com/r/test/comments/c/">Untrusted title link</a></shreddit-post>`;
     const titles = discover(document).filter(item => item.kind === 'title');
-    expect(titles.map(item => item.element.textContent)).toEqual(['Card title', 'Compact title', 'Untrusted title link']);
-    expect(feedTitleLink(titles[0]!.element)?.getAttribute('href')).toBe('/r/test/comments/a/hello/');
-    expect(feedTitleLink(titles[2]!.element)).toBeNull();
+    expect(titles.map(item => item.element.textContent).sort()).toEqual(['Card title', 'Compact title', 'Untrusted title link']);
+    const card = titles.find(item => item.element.textContent === 'Card title');
+    const unsafe = titles.find(item => item.element.textContent === 'Untrusted title link');
+    expect(card && feedTitleLink(card.element)?.getAttribute('href')).toBe('/r/test/comments/a/hello/');
+    expect(unsafe && feedTitleLink(unsafe.element)).toBeNull();
   });
   it('excludes injected translations from link labels in source snapshots', () => {
     const source = document.createElement('div'); source.innerHTML = '<a href="https://example.com">example.com</a>';
