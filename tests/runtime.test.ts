@@ -775,6 +775,7 @@ it('reuses persisted Article paragraphs across normal, expanded and restored vie
   vi.stubGlobal('GM_setValue', (key: string, value: unknown) => { stored.set(key, value); });
   const route = { hostname: 'x.com', href: 'https://x.com/user/status/123', pathname: '/user/status/123' };
   vi.stubGlobal('location', route);
+  service.destroy(); service = new TranslationService({ ...DEFAULTS }, new TranslationCache());
   const article = '<article data-testid="twitterArticleReadView"><h1 data-testid="twitter-article-title">Memory guide</h1><div data-testid="longformRichTextComponent"><div data-block="true">Shared paragraph</div></div></article>';
   document.body.innerHTML = '<article data-testid="tweet"><a href="/user/status/123"><time>Now</time></a>' + article + '</article>';
   const translate = vi.spyOn(service, 'section').mockResolvedValue('缓存译文');
