@@ -3,7 +3,7 @@
 // @name:en      Forum Translator
 // @description:en Translate Reddit and X with multiple translation profiles, OpenAI-compatible APIs, and adjustable typography.
 // @namespace    sunbigfly/forum-translater
-// @version      0.3.5
+// @version      0.3.6
 // @description  Reddit 首页及板块标题双语翻译，支持多翻译 Profile、跨页面缓存及 X 原生布局。
 // @homepageURL  https://github.com/nukewarrior/forum-translater
 // @supportURL   https://github.com/nukewarrior/forum-translater/issues
@@ -254,12 +254,16 @@
     return { update, destroy: () => style.remove() };
   }
 
+  // src/site-storage.ts
+  function isXSite(host = location.hostname) {
+    return /(^|\.)(x|twitter)\.com$/.test(host);
+  }
+  function siteKey(name, host = location.hostname) {
+    const site = /(^|\.)reddit\.com$/.test(host) ? "reddit" : isXSite(host) ? "x" : host;
+    return `ft:site:${site}:${name}`;
+  }
+
   // src/profile-store.ts
-  var KEY = "ft:profiles:v1";
-  var KEY_PREFIX = "ft:profile-key:v1:";
-  var LEGACY_CLEANUP_MARKER = "ft:legacy-vocabulary-cleanup:v1";
-  var OLD_VOCABULARY_KEYS = ["ft:wordbook:v1", "ft:vocabulary:v1", "ft:combined-vocabulary:v1"];
-  var OLD_VOCABULARY_PREFIXES = ["ft:wordbook-detail:v1:"];
   function defaultAiConfig() {
     return {
       baseUrl: "",
@@ -282,11 +286,21 @@
     return typeof profile.id === "string" && !!profile.id && typeof profile.name === "string" && !!profile.name.trim() && (profile.provider === "google" || profile.provider === "microsoft" || profile.provider === "ai") && typeof profile.revision === "number" && Number.isInteger(profile.revision) && !!profile.ai && typeof profile.ai === "object";
   }
   function readRaw() {
-    const stored2 = GM_getValue(KEY, null);
+    const key = siteKey("profiles:v1");
+    const local = GM_getValue(key, null);
+    const stored2 = local === null ? GM_getValue("ft:profiles:v1", null) : local;
     if (stored2 && typeof stored2 === "object") {
       const value = stored2;
       if (value.version === 1 && Array.isArray(value.profiles) && value.profiles.length && value.profiles.every(isProfile) && typeof value.activeId === "string" && value.profiles.some((profile) => profile.id === value.activeId)) {
-        cleanupOldTranslationAndVocabularyData();
+        if (local === null) {
+          for (const profile of value.profiles) {
+            const profileKey = siteKey("profile-key:v1:" + profile.id);
+            if (GM_getValue(profileKey, null) !== null) continue;
+            const apiKey = GM_getValue("ft:profile-key:v1:" + profile.id, "");
+            GM_setValue(profileKey, typeof apiKey === "string" ? apiKey : "");
+          }
+          GM_setValue(key, value);
+        }
         return value;
       }
     }
@@ -296,28 +310,8 @@
       activeId: first.id,
       profiles: [{ ...first, ai: { ...first.ai, apiKey: void 0 } }]
     };
-    GM_setValue(KEY, fresh);
-    cleanupOldTranslationAndVocabularyData();
+    GM_setValue(key, fresh);
     return fresh;
-  }
-  function cleanupOldTranslationAndVocabularyData() {
-    if (GM_getValue(LEGACY_CLEANUP_MARKER, false)) return;
-    try {
-      const legacy = GM_getValue("ft:settings:v1", {});
-      if (legacy && typeof legacy === "object" && !Array.isArray(legacy)) {
-        const { provider: _provider, ai: _ai, vocabulary: _vocabulary, ...global } = legacy;
-        if ("provider" in legacy || "ai" in legacy || "vocabulary" in legacy) {
-          GM_setValue("ft:settings:v1", global);
-        }
-      }
-      GM_deleteValue("ft:ai-key:v1");
-      for (const key of OLD_VOCABULARY_KEYS) GM_deleteValue(key);
-      for (const key of GM_listValues()) {
-        if (OLD_VOCABULARY_PREFIXES.some((prefix) => key.startsWith(prefix))) GM_deleteValue(key);
-      }
-      GM_setValue(LEGACY_CLEANUP_MARKER, true);
-    } catch {
-    }
   }
   function listProfiles() {
     const raw = readRaw();
@@ -325,7 +319,7 @@
       activeId: raw.activeId,
       profiles: raw.profiles.map((profile) => ({
         ...profile,
-        ai: { ...defaultAiConfig(), ...profile.ai, apiKey: GM_getValue(KEY_PREFIX + profile.id, "") }
+        ai: { ...defaultAiConfig(), ...profile.ai, apiKey: GM_getValue(siteKey("profile-key:v1:" + profile.id), "") }
       }))
     };
   }
@@ -362,9 +356,9 @@
     const normalized = { ...profile, name: profile.name.trim(), ai: { ...defaultAiConfig(), ...profile.ai } };
     uniqueName(current.profiles, normalized);
     normalized.revision = original2 ? original2.revision + Number(translationIdentity(original2) !== translationIdentity(normalized)) : 1;
-    GM_setValue(KEY_PREFIX + normalized.id, normalized.ai.apiKey);
+    GM_setValue(siteKey("profile-key:v1:" + normalized.id), normalized.ai.apiKey);
     const profiles = original2 ? current.profiles.map((item) => item.id === normalized.id ? normalized : item) : [...current.profiles, normalized];
-    GM_setValue(KEY, { version: 1, activeId: current.activeId, profiles: profiles.map(stored) });
+    GM_setValue(siteKey("profiles:v1"), { version: 1, activeId: current.activeId, profiles: profiles.map(stored) });
     return normalized;
   }
   function selectProfile(id) {
@@ -374,7 +368,7 @@
     if (candidate.provider === "ai" && (!candidate.ai.baseUrl.trim() || !candidate.ai.model.trim())) {
       throw new Error("请先完善 AI 地址和模型");
     }
-    GM_setValue(KEY, { version: 1, activeId: id, profiles: state.profiles.map(stored) });
+    GM_setValue(siteKey("profiles:v1"), { version: 1, activeId: id, profiles: state.profiles.map(stored) });
   }
   function removeProfile(id, replacementId) {
     const state = listProfiles();
@@ -383,8 +377,8 @@
     const remaining = state.profiles.filter((profile) => profile.id !== id);
     const nextId = id !== state.activeId ? state.activeId : replacementId;
     if (!nextId || !remaining.some((profile) => profile.id === nextId)) throw new Error("需要选择替代 Profile");
-    GM_setValue(KEY, { version: 1, activeId: nextId, profiles: remaining.map(stored) });
-    GM_deleteValue(KEY_PREFIX + id);
+    GM_setValue(siteKey("profiles:v1"), { version: 1, activeId: nextId, profiles: remaining.map(stored) });
+    GM_deleteValue(siteKey("profile-key:v1:" + id));
   }
   function cloneProfile(id) {
     const state = listProfiles();
@@ -440,7 +434,9 @@
     if (!ai.model.trim()) throw new Error("请填写 AI 模型");
   }
   function loadSettings() {
-    const settings = normalizeSettings(GM_getValue("ft:settings:v1", {}));
+    const stored2 = GM_getValue(siteKey("settings:v1"), null);
+    const settings = normalizeSettings(stored2 ?? GM_getValue("ft:settings:v1", {}));
+    if (stored2 === null) saveSettings(settings);
     const profile = activeProfile();
     settings.profileId = profile.id;
     settings.profileRevision = profile.revision;
@@ -450,11 +446,8 @@
     return settings;
   }
   function saveSettings(settings) {
-    const { provider: _provider, ai: _ai, profileId: _profileId, profileRevision: _revision, ...global } = settings;
-    GM_setValue("ft:settings:v1", { ...global, translationOnly: false });
-  }
-  function isXSite(host = location.hostname) {
-    return /(^|\.)(x|twitter)\.com$/.test(host);
+    const { provider: _provider, ai: _ai, profileId: _profileId, profileRevision: _revision, ...site } = settings;
+    GM_setValue(siteKey("settings:v1"), { ...site, translationOnly: false });
   }
   function displayKey(url = location.href) {
     const page = new URL(url);
@@ -2155,13 +2148,13 @@
   };
 
   // src/translation/service.ts
-  var CACHE_KEY = "ft:translations:v1";
   var TTL = 30 * 864e5;
   var TranslationCache = class {
+    key = siteKey("translations:v1");
     values = /* @__PURE__ */ new Map();
     timer;
     constructor() {
-      const stored2 = GM_getValue(CACHE_KEY, []);
+      const stored2 = GM_getValue(this.key, []);
       if (Array.isArray(stored2)) for (const item of stored2) {
         if (!Array.isArray(item) || typeof item[0] !== "string") continue;
         const entry = item[1];
@@ -2206,7 +2199,7 @@
       clearTimeout(this.timer);
       this.timer = void 0;
       try {
-        GM_setValue(CACHE_KEY, [...this.values]);
+        GM_setValue(this.key, [...this.values]);
       } catch {
       }
     }
@@ -3369,7 +3362,7 @@
       const isNew = !state.profiles.some((profile) => profile.id === selectedId);
       const isActive = selectedId === state.activeId;
       host.innerHTML = `
-      <div class="ft-panel"><strong>我的 Profile</strong><div class="ft-muted">Reddit 与 X 共用当前选择</div>
+      <div class="ft-panel"><strong>我的 Profile</strong><div class="ft-muted">仅对 ${isXSite() ? "X" : "Reddit"} 生效，另一站点独立配置</div>
         ${state.profiles.map((profile) => `<button type="button" class="ft-row" data-action="select" data-id="${escape(profile.id)}" aria-selected="${profile.id === selectedId}">
           <strong>${escape(profile.name)}${profile.id === state.activeId ? " · ✓ 当前" : ""}</strong>
           <span>${typeLabel(profile.provider)}${!complete(profile) ? " · 待完善" : ""}</span></button>`).join("")}
@@ -3654,7 +3647,7 @@
       const heading = document.createElement("h1");
       heading.textContent = "forum-translator";
       const subtitle = document.createElement("small");
-      subtitle.textContent = "翻译设置";
+      subtitle.textContent = `${isXSite() ? "X" : "Reddit"} 翻译设置 · 仅本站生效`;
       title.append(heading, subtitle);
       const dismiss = document.createElement("button");
       dismiss.type = "button";
@@ -3761,7 +3754,7 @@
       theme.value = current.translationTheme;
       themeLabel.append(theme);
       scope.append(themeLabel);
-      input("enabled", "开启本页及后续页面自动翻译", "checkbox", current.enabled);
+      input("enabled", `开启 ${isXSite() ? "X" : "Reddit"} 全站自动翻译`, "checkbox", current.enabled);
       for (const [key, label] of [["title", isXSite() ? "帖子标题" : "帖子详情及搜索结果标题"], ["body", "帖子正文"], ["comment", "评论"]]) {
         const field = input(key, isXSite() && key === "body" ? "推文、回复与引用推文" : label, "checkbox", current[key]);
         if (isXSite() && key !== "body" && field.parentElement) field.parentElement.hidden = true;
@@ -3792,10 +3785,10 @@
       actions.append(submit);
       const clear = document.createElement("button");
       clear.type = "button";
-      clear.textContent = "清除译文缓存";
+      clear.textContent = "清除本站译文缓存";
       clear.onclick = () => {
         clearCache();
-        status.textContent = "缓存已清除，已显示的译文保留。";
+        status.textContent = "本站缓存已清除，已显示的译文保留。";
       };
       cache.append(clear);
       const close = document.createElement("button");
@@ -3813,7 +3806,10 @@
         }
         next.fonts = fontControls?.read() ?? current.fonts;
         next.translationTheme = theme.value;
-        for (const name of ["enabled", "title", "redditFeedTitle", "body", "comment", "translationOnly"]) next[name] = fields.get(name).checked;
+        for (const name of ["enabled", "title", "redditFeedTitle", "body", "comment", "translationOnly"]) {
+          const field = fields.get(name);
+          if (!field.parentElement?.hidden) next[name] = field.checked;
+        }
         for (const name of ["before", "after"]) next[name] = Number(fields.get(name)?.value);
         for (const field of fields.values()) {
           if (!field.matches(":disabled") && !field.checkValidity()) {
