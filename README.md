@@ -2,7 +2,7 @@
 
 > Reddit 与 X/Twitter 的逐段中文翻译脚本。支持 Google、Microsoft 和多个自定义 AI Profile，兼容 OpenAI Responses API 与 Chat Completions API。
 
-**版本：0.3.5（修复 Reddit 列表标题翻译）** · MIT License · 基于 [sunbigfly/forum-translater](https://github.com/sunbigfly/forum-translater) 定制
+**版本：0.3.6（Reddit / X 设置独立）** · MIT License · 基于 [sunbigfly/forum-translater](https://github.com/sunbigfly/forum-translater) 定制
 
 ## 安装
 
@@ -22,7 +22,7 @@
 - 支持通过 `/models` 读取列表和手动输入模型 ID；模型列表不可用时不影响手动填写。
 - 可以发送真实、可能产生少量费用的测试翻译请求。
 - Tampermonkey 菜单直接列出当前可切换的 Profile。
-- Reddit 与 X 全局共用当前 Profile。**当前标签页切换立即生效**，其他已经打开的标签页在刷新或站内路由导航时才读取新 Profile。
+- Reddit 与 X 的设置、Profile 列表、当前选择、API Key 存储及缓存分别隔离；修改或删除一站的 Profile 不影响另一站。X 与 Twitter 共用 X 配置，Reddit 各受支持子域共用 Reddit 配置。**当前标签页切换立即生效**，同站其他已经打开的标签页在刷新或站内路由导航时才读取新 Profile。
 - 切换时取消旧请求、立即移除旧译文，并按新 Profile 的独立缓存或实际接口重新翻译。
 - API 故障、429 或余额不足时提示错误，不自动切换到其他 Profile。
 
@@ -56,10 +56,11 @@
 
 ## 升级、存储与隐私
 
-- 首次升级至多 Profile 版本时，**旧翻译服务配置不会迁移**；默认使用 Google 翻译。请准备好重新输入 AI 地址、模型和 API Key。
+- 每个站点首次使用隔离版本时，将旧共享设置和多 Profile 数据复制到本站存储，之后仅修改本站数据；已有本站配置不会被覆盖。多 Profile 之前的单服务 AI 配置仍不迁移，无可用 Profile 时默认使用 Google 翻译。
 - 字体与译文显示设置继续保留；旧 X 布局偏好不再生效，不影响翻译 Profile 与缓存。
-- 旧单词本、词汇分析缓存与关联详情数据会在首次初始化时自动清理，不提供恢复功能。
-- 每个 Profile 有独立 ID 和配置版本号，译文缓存按 Profile 隔离。重命名不使缓存失效，修改关键翻译参数会使旧缓存无法命中。
+- 保留旧共享数据供回退；不再自动清理历史单词本和词汇数据。旧共享译文缓存不迁移，两站分别按需建立缓存。
+- 升级后刷新 Reddit 和 X 已打开的页面，停止旧脚本继续写入共享数据。旧共享开关值会原样保留：若此前关闭 X 时连带关闭 Reddit，请在 Reddit 单独开启一次，之后互不影响。
+- 每个 Profile 有独立 ID 和配置版本号，译文缓存按站点及 Profile 隔离。重命名不使缓存失效，修改关键翻译参数会使旧缓存无法命中。
 - 配置及密钥仅保存在当前 Tampermonkey 环境中，无跨设备同步、导入导出或云端备份。
 - Tampermonkey 存储不是加密保险箱。脚本会把待译文字发送给你选中的翻译服务，可能产生服务费用。
 - 只支持 `Reddit` 和 `X/Twitter` 指定页面，不自动在其他网站执行。

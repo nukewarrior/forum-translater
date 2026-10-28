@@ -1,5 +1,6 @@
 import { activeProfile, cloneProfile, listProfiles, makeProfile, removeProfile, selectProfile, upsertProfile, type TranslationProfile, type TranslationProvider } from './profile-store';
 import { normalizeAiBaseUrl, validateAiProfile } from './settings';
+import { isXSite } from './site-storage';
 import { requestJson } from './translation/provider';
 import { translateAi } from './translation/ai';
 
@@ -74,7 +75,7 @@ export function mountProfileSection(root: HTMLElement, onChanged: () => void): (
     const isNew = !state.profiles.some(profile => profile.id === selectedId);
     const isActive = selectedId === state.activeId;
     host.innerHTML = `
-      <div class="ft-panel"><strong>我的 Profile</strong><div class="ft-muted">Reddit 与 X 共用当前选择</div>
+      <div class="ft-panel"><strong>我的 Profile</strong><div class="ft-muted">仅对 ${isXSite() ? 'X' : 'Reddit'} 生效，另一站点独立配置</div>
         ${state.profiles.map(profile => `<button type="button" class="ft-row" data-action="select" data-id="${escape(profile.id)}" aria-selected="${profile.id === selectedId}">
           <strong>${escape(profile.name)}${profile.id === state.activeId ? ' · ✓ 当前' : ''}</strong>
           <span>${typeLabel(profile.provider)}${!complete(profile) ? ' · 待完善' : ''}</span></button>`).join('')}

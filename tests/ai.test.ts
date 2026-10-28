@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { webcrypto } from 'node:crypto';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { siteKey } from '../src/site-storage';
 import { DEFAULTS, loadSettings, normalizeAiBaseUrl, saveSettings, type Settings } from '../src/settings';
 import { aiEntries, ResponseStreamDecoder, translateAi, translateAiBatch } from '../src/translation/ai';
 import { AiBatcher } from '../src/translation/ai-batcher';
@@ -258,8 +259,8 @@ it('isolates models and prompts in cache without persisting credentials in cache
   }
   expect(request).toHaveBeenCalledTimes(3);
   saveSettings(settings); expect(loadSettings()).toMatchObject({ provider: 'google', enabled: settings.enabled, translationTheme: settings.translationTheme });
-  expect(JSON.stringify(store.get('ft:settings:v1'))).not.toContain(ai.apiKey);
-  expect(JSON.stringify(store.get('ft:translations:v1'))).not.toContain(ai.apiKey);
+  expect(JSON.stringify(store.get(siteKey('settings:v1')))).not.toContain(ai.apiKey);
+  expect(JSON.stringify(store.get(siteKey('translations:v1')))).not.toContain(ai.apiKey);
   expect(normalizeAiBaseUrl('http://localhost:8080/v1/')).toBe('http://localhost:8080/v1');
   expect(() => normalizeAiBaseUrl('http://example.com/v1')).toThrow();
   expect(() => normalizeAiBaseUrl('https://key@example.com/v1')).toThrow();

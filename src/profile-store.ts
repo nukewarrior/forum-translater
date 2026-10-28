@@ -1,4 +1,5 @@
 import type { AiProfile } from './settings';
+import { siteKey } from './site-storage';
 
 export type TranslationProvider = 'google' | 'microsoft' | 'ai';
 export type AiProtocol = 'responses' | 'chat-completions';
@@ -24,12 +25,6 @@ export interface ProfileCollection {
   profiles: TranslationProfile[];
 }
 
-const KEY = 'ft:profiles:v1';
-const KEY_PREFIX = 'ft:profile-key:v1:';
-const LEGACY_CLEANUP_MARKER = 'ft:legacy-vocabulary-cleanup:v1';
-const OLD_VOCABULARY_KEYS = ['ft:wordbook:v1', 'ft:vocabulary:v1', 'ft:combined-vocabulary:v1'];
-const OLD_VOCABULARY_PREFIXES = ['ft:wordbook-detail:v1:'];
-
 export function defaultAiConfig(): AiProfile {
   return {
     baseUrl: '', apiKey: '', model: '', prompt: '',
@@ -53,13 +48,24 @@ function isProfile(value: unknown): value is StoredProfile {
 }
 
 function readRaw(): StoredProfileCollection {
-  const stored: unknown = GM_getValue(KEY, null);
+  const key = siteKey('profiles:v1');
+  const local: unknown = GM_getValue(key, null);
+  const stored: unknown = local === null ? GM_getValue('ft:profiles:v1', null) : local;
   if (stored && typeof stored === 'object') {
     const value = stored as Partial<StoredProfileCollection>;
     if (value.version === 1 && Array.isArray(value.profiles) && value.profiles.length
       && value.profiles.every(isProfile) && typeof value.activeId === 'string'
       && value.profiles.some(profile => profile.id === value.activeId)) {
-      cleanupOldTranslationAndVocabularyData();
+      if (local === null) {
+        // Commit the collection after its keys so an interrupted migration can retry.
+        for (const profile of value.profiles) {
+          const profileKey = siteKey('profile-key:v1:' + profile.id);
+          if (GM_getValue<unknown>(profileKey, null) !== null) continue;
+          const apiKey = GM_getValue<unknown>('ft:profile-key:v1:' + profile.id, '');
+          GM_setValue(profileKey, typeof apiKey === 'string' ? apiKey : '');
+        }
+        GM_setValue(key, value);
+      }
       return value as StoredProfileCollection;
     }
   }
@@ -67,33 +73,8 @@ function readRaw(): StoredProfileCollection {
   const fresh: StoredProfileCollection = {
     version: 1, activeId: first.id, profiles: [{ ...first, ai: { ...first.ai, apiKey: undefined } } as StoredProfile],
   };
-  // Write the new store before deleting any legacy data; the migration must be idempotent.
-  GM_setValue(KEY, fresh);
-  cleanupOldTranslationAndVocabularyData();
+  GM_setValue(key, fresh);
   return fresh;
-}
-
-function cleanupOldTranslationAndVocabularyData(): void {
-  if (GM_getValue<boolean>(LEGACY_CLEANUP_MARKER, false)) return;
-  try {
-    // Preserve global fonts, appearance and site switches, but discard the
-    // previous single-provider AI settings (including stale endpoint/model).
-    const legacy = GM_getValue<Record<string, unknown>>('ft:settings:v1', {});
-    if (legacy && typeof legacy === 'object' && !Array.isArray(legacy)) {
-      const { provider: _provider, ai: _ai, vocabulary: _vocabulary, ...global } = legacy;
-      if ('provider' in legacy || 'ai' in legacy || 'vocabulary' in legacy) {
-        GM_setValue('ft:settings:v1', global);
-      }
-    }
-    GM_deleteValue('ft:ai-key:v1');
-    for (const key of OLD_VOCABULARY_KEYS) GM_deleteValue(key);
-    for (const key of GM_listValues()) {
-      if (OLD_VOCABULARY_PREFIXES.some(prefix => key.startsWith(prefix))) GM_deleteValue(key);
-    }
-    GM_setValue(LEGACY_CLEANUP_MARKER, true);
-  } catch {
-    // Retry after next reload if interrupted; never block translation.
-  }
 }
 
 export function listProfiles(): ProfileCollection {
@@ -102,7 +83,7 @@ export function listProfiles(): ProfileCollection {
     activeId: raw.activeId,
     profiles: raw.profiles.map(profile => ({
       ...profile,
-      ai: { ...defaultAiConfig(), ...profile.ai, apiKey: GM_getValue<string>(KEY_PREFIX + profile.id, '') },
+      ai: { ...defaultAiConfig(), ...profile.ai, apiKey: GM_getValue<string>(siteKey('profile-key:v1:' + profile.id), '') },
     })),
   };
 }
@@ -139,11 +120,11 @@ export function upsertProfile(profile: TranslationProfile): TranslationProfile {
   normalized.revision = original
     ? original.revision + Number(translationIdentity(original) !== translationIdentity(normalized))
     : 1;
-  GM_setValue(KEY_PREFIX + normalized.id, normalized.ai.apiKey);
+  GM_setValue(siteKey('profile-key:v1:' + normalized.id), normalized.ai.apiKey);
   const profiles = original
     ? current.profiles.map(item => item.id === normalized.id ? normalized : item)
     : [...current.profiles, normalized];
-  GM_setValue(KEY, { version: 1, activeId: current.activeId, profiles: profiles.map(stored) } satisfies StoredProfileCollection);
+  GM_setValue(siteKey('profiles:v1'), { version: 1, activeId: current.activeId, profiles: profiles.map(stored) } satisfies StoredProfileCollection);
   return normalized;
 }
 
@@ -154,7 +135,7 @@ export function selectProfile(id: string): void {
   if (candidate.provider === 'ai' && (!candidate.ai.baseUrl.trim() || !candidate.ai.model.trim())) {
     throw new Error('请先完善 AI 地址和模型');
   }
-  GM_setValue(KEY, { version: 1, activeId: id, profiles: state.profiles.map(stored) } satisfies StoredProfileCollection);
+  GM_setValue(siteKey('profiles:v1'), { version: 1, activeId: id, profiles: state.profiles.map(stored) } satisfies StoredProfileCollection);
 }
 
 export function removeProfile(id: string, replacementId?: string): void {
@@ -164,8 +145,8 @@ export function removeProfile(id: string, replacementId?: string): void {
   const remaining = state.profiles.filter(profile => profile.id !== id);
   const nextId = id !== state.activeId ? state.activeId : replacementId;
   if (!nextId || !remaining.some(profile => profile.id === nextId)) throw new Error('需要选择替代 Profile');
-  GM_setValue(KEY, { version: 1, activeId: nextId, profiles: remaining.map(stored) } satisfies StoredProfileCollection);
-  GM_deleteValue(KEY_PREFIX + id);
+  GM_setValue(siteKey('profiles:v1'), { version: 1, activeId: nextId, profiles: remaining.map(stored) } satisfies StoredProfileCollection);
+  GM_deleteValue(siteKey('profile-key:v1:' + id));
 }
 
 export function cloneProfile(id: string): TranslationProfile {

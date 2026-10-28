@@ -2,6 +2,7 @@
 import { webcrypto } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULTS } from '../src/settings';
+import { siteKey } from '../src/site-storage';
 import { TranslationCache, TranslationService, splitText } from '../src/translation/service';
 import { requestJson, validateTranslation } from '../src/translation/provider';
 import { readTranslationMetrics } from '../src/translation/metrics';
@@ -119,7 +120,7 @@ describe('translation gateway and cache', () => {
     expect(validateTranslation('Hi ⟦0⟧', '你好 ⟦ 0 ⟧')).toBe('你好 ⟦0⟧');
   });
   it('expires cached entries and does not request untranslated code-only content', async () => {
-    store.set('ft:translations:v1', [['expired', { text: 'old', expires: 0 }]]);
+    store.set(siteKey('translations:v1'), [['expired', { text: 'old', expires: 0 }]]);
     const cache = new TranslationCache(); expect(cache.get('expired')).toBeUndefined(); cache.clear();
     const request = vi.fn(); vi.stubGlobal('GM_xmlhttpRequest', request);
     expect(await service.section('⟦0⟧', 'x', 'visible', new AbortController().signal)).toBe('⟦0⟧'); expect(request).not.toHaveBeenCalled();

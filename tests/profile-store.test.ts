@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { webcrypto } from 'node:crypto';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
+import { siteKey } from '../src/site-storage';
 import { activeProfile, cloneProfile, defaultAiConfig, listProfiles, makeProfile, removeProfile, selectProfile, upsertProfile } from '../src/profile-store';
 
 let store: Map<string, unknown>;
@@ -14,7 +15,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-it('initializes exactly one Google profile without importing legacy AI settings', () => {
+it('initializes one site Google profile without importing or deleting legacy AI settings', () => {
   store.set('ft:ai-key:v1', 'old-secret');
   store.set('ft:wordbook:v1', [{ word: 'unused' }]);
   store.set('ft:vocabulary:v1', [['old', 'cache']]);
@@ -25,12 +26,13 @@ it('initializes exactly one Google profile without importing legacy AI settings'
   const state = listProfiles();
   expect(state.profiles).toHaveLength(1);
   expect(state.profiles[0]).toMatchObject({ name: 'Google 翻译', provider: 'google', id: 'default-google' });
-  expect(store.has('ft:ai-key:v1')).toBe(false);
-  expect(store.has('ft:wordbook:v1')).toBe(false);
-  expect(store.has('ft:vocabulary:v1')).toBe(false);
-  expect(store.has('ft:wordbook-detail:v1:wiktionary:test')).toBe(false);
+  expect(store.get('ft:ai-key:v1')).toBe('old-secret');
+  expect(store.has('ft:wordbook:v1')).toBe(true);
+  expect(store.has('ft:vocabulary:v1')).toBe(true);
+  expect(store.has('ft:wordbook-detail:v1:wiktionary:test')).toBe(true);
   expect(store.get('ft:display-site:reddit.com/*')).toBe(true);
-  expect(store.get('ft:settings:v1')).toEqual({
+  expect(store.get('ft:settings:v1')).toMatchObject({
+    provider: 'ai', ai: { apiKey: 'old' }, vocabulary: true,
     fonts: { heading: 'Legacy Font' }, translationTheme: 'paper', xHideAds: false, before: 300,
   });
   expect(listProfiles().activeId).toBe(state.activeId);
@@ -42,7 +44,7 @@ it('stores API Keys independently, copies without credentials, and tracks only t
   const saved = upsertProfile(profile);
   expect(saved.revision).toBe(1);
   expect(listProfiles().profiles.find(item => item.id === profile.id)?.ai.apiKey).toBe('first-key');
-  expect(JSON.stringify(store.get('ft:profiles:v1'))).not.toContain('first-key');
+  expect(JSON.stringify(store.get(siteKey('profiles:v1')))).not.toContain('first-key');
   const renamed = upsertProfile({ ...saved, name: '硅基流动备用' });
   expect(renamed.revision).toBe(1);
   const changed = upsertProfile({ ...renamed, ai: { ...renamed.ai, model: 'another-model' } });
@@ -62,5 +64,5 @@ it('allows AI profiles without an API Key and prevents deleting the only profile
   expect(activeProfile().ai.apiKey).toBe('');
   removeProfile(complete.id, initial.id);
   expect(activeProfile().id).toBe(initial.id);
-  expect(store.has('ft:profile-key:v1:' + complete.id)).toBe(false);
+  expect(store.has(siteKey('profile-key:v1:' + complete.id))).toBe(false);
 });

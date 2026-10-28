@@ -1,5 +1,7 @@
 import { DEFAULT_FONTS, normalizeFonts, type FontSettings } from './fonts';
 import { activeProfile } from './profile-store';
+import { isXSite, siteKey } from './site-storage';
+export { isXSite } from './site-storage';
 export type Kind = 'title' | 'body' | 'comment';
 export const TRANSLATION_THEMES = { quote: '淡灰引用', plain: '自然正文', weakening: '弱化译文', 'dividing-line': '分隔线', underline: '下划线', highlight: '柔和高亮', paper: '纸张卡片' } as const;
 export type TranslationTheme = keyof typeof TRANSLATION_THEMES;
@@ -46,7 +48,9 @@ export function validateAiProfile(ai: AiProfile): void {
   if (!ai.model.trim()) throw new Error('请填写 AI 模型');
 }
 export function loadSettings(): Settings {
-  const settings = normalizeSettings(GM_getValue<Partial<Settings>>('ft:settings:v1', {}));
+  const stored = GM_getValue<Partial<Settings> | null>(siteKey('settings:v1'), null);
+  const settings = normalizeSettings(stored ?? GM_getValue<Partial<Settings>>('ft:settings:v1', {}));
+  if (stored === null) saveSettings(settings);
   const profile = activeProfile();
   settings.profileId = profile.id;
   settings.profileRevision = profile.revision;
@@ -56,11 +60,9 @@ export function loadSettings(): Settings {
   return settings;
 }
 export function saveSettings(settings: Settings): void {
-  const { provider: _provider, ai: _ai, profileId: _profileId, profileRevision: _revision, ...global } = settings;
-  GM_setValue('ft:settings:v1', { ...global, translationOnly: false });
+  const { provider: _provider, ai: _ai, profileId: _profileId, profileRevision: _revision, ...site } = settings;
+  GM_setValue(siteKey('settings:v1'), { ...site, translationOnly: false });
 }
-
-export function isXSite(host = location.hostname): boolean { return /(^|\.)(x|twitter)\.com$/.test(host); }
 
 function displayKey(url = location.href): string {
   const page = new URL(url);

@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RedditRuntime } from '../src/runtime';
 import { DEFAULTS } from '../src/settings';
+import { siteKey } from '../src/site-storage';
 import { TranslationCache, TranslationService } from '../src/translation/service';
 import * as reddit from '../src/reddit';
 
@@ -120,7 +121,7 @@ it.each(['google', 'ai'] as const)(
     expect(document.querySelector('[data-ft-owned="translation"]')?.textContent).toContain('同一个中文标题');
     runtime.destroy(); runtime = undefined;
     // The first runtime has flushed the persisted cache, as a real navigation would.
-    expect(stored.has('ft:translations:v1')).toBe(true);
+    expect(stored.has(siteKey('translations:v1'))).toBe(true);
     service.destroy(); Observer.instances = [];
     route.pathname = '/r/test/comments/abc123/same-title/';
     route.href = 'https://www.reddit.com/r/test/comments/abc123/same-title/';

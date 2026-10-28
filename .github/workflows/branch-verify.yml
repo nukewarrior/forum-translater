@@ -20,7 +20,7 @@ jobs:
       - run: npm run verify
       - uses: actions/upload-artifact@v4
         with:
-          name: forum-translator-0.3.5-userscript
+          name: forum-translator-0.3.6-userscript
           path: |
             dist/forum-translator.user.js
             dist/forum-translator.user.js.build.json

@@ -1,6 +1,7 @@
 import { withTranslationRetry } from './retry';
 import { TRANSLATION_PROMPT_VERSION } from './translation-prompt';
 import { normalizeAiBaseUrl, type Settings } from '../settings';
+import { siteKey } from '../site-storage';
 import type { TranslationTaskPriority } from './translation-task-manager';
 import { TranslationWorkerController } from './worker-controller';
 export { splitText } from './worker-controller';
@@ -9,14 +10,14 @@ import type { TranslationContext } from './ai';
 import { translate } from './provider';
 import { translationBlockNeedsTranslation, translationTextFingerprint } from './translation-text';
 interface CacheEntry { text: string; expires: number }
-const CACHE_KEY = 'ft:translations:v1';
 const TTL = 30 * 86400000;
 // Bound by characters as well as entries, including unusually long translations.
 export class TranslationCache {
+  private readonly key = siteKey('translations:v1');
   private values = new Map<string, CacheEntry>();
   private timer: ReturnType<typeof setTimeout> | undefined;
   constructor() {
-    const stored: unknown = GM_getValue(CACHE_KEY, []);
+    const stored: unknown = GM_getValue(this.key, []);
     if (Array.isArray(stored)) for (const item of stored) {
       if (!Array.isArray(item) || typeof item[0] !== 'string') continue;
       const entry = item[1] as Partial<CacheEntry> | null;
@@ -50,7 +51,7 @@ export class TranslationCache {
   clear(): void { this.values.clear(); this.flush(); }
   flush(): void {
     clearTimeout(this.timer); this.timer = undefined;
-    try { GM_setValue(CACHE_KEY, [...this.values]); } catch { /* cache quota must not break reading */ }
+    try { GM_setValue(this.key, [...this.values]); } catch { /* cache quota must not break reading */ }
   }
 }
 export class TranslationService {

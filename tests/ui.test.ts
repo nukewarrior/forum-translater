@@ -2,7 +2,7 @@
 import { webcrypto } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mountControls } from '../src/ui';
-import { DEFAULTS } from '../src/settings';
+import { DEFAULTS, loadSettings, saveSettings } from '../src/settings';
 import { activeProfile, listProfiles } from '../src/profile-store';
 
 let destroy: (() => void) | undefined;
@@ -44,7 +44,7 @@ function setField(shadow: ShadowRoot, name: string, value: string): void {
   field.dispatchEvent(new Event('change', { bubbles: true }));
 }
 describe('translation profile settings', () => {
-  it('opens the new profile editor and retains the independent global display controls', () => {
+  it('opens the new profile editor and retains the independent site display controls', () => {
     const save = vi.fn();
     destroy = mountControls(() => ({ ...DEFAULTS }), save, vi.fn());
     const shadow = open();
@@ -73,6 +73,24 @@ describe('translation profile settings', () => {
     feed.checked = true;
     shadow.querySelector('form')?.dispatchEvent(new Event('submit', { cancelable: true }));
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ redditFeedTitle: true, title: true }));
+  });
+  it('saves X switches without changing Reddit or submitting hidden scope fields', () => {
+    vi.stubGlobal('location', { hostname: 'www.reddit.com', pathname: '/', href: 'https://www.reddit.com/' });
+    const reddit = loadSettings();
+    vi.stubGlobal('location', { hostname: 'x.com', pathname: '/home', href: 'https://x.com/home' });
+    destroy = mountControls(loadSettings, saveSettings, vi.fn());
+    const shadow = open();
+    expect(shadow.textContent).toContain('X 翻译设置 · 仅本站生效');
+    expect(shadow.textContent).toContain('另一站点独立配置');
+    for (const name of ['enabled', 'body', 'title', 'comment']) {
+      const field = shadow.querySelector<HTMLInputElement>(`[name="${name}"]`);
+      if (!field) throw new Error('Missing scope field ' + name);
+      field.checked = false;
+    }
+    shadow.querySelector('form')?.dispatchEvent(new Event('submit', { cancelable: true }));
+    expect(loadSettings()).toMatchObject({ enabled: false, body: false, title: true, comment: true });
+    vi.stubGlobal('location', { hostname: 'www.reddit.com', pathname: '/', href: 'https://www.reddit.com/' });
+    expect(loadSettings()).toEqual(reddit);
   });
   it('creates AI profiles, saves an empty API Key and activates the selected profile', () => {
     const onChanged = vi.fn();

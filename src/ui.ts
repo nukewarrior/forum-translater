@@ -52,7 +52,7 @@ export function mountControls(read: () => Settings, save: (settings: Settings) =
     const header = document.createElement('header');
     const brand = document.createElement('span'); brand.className = 'brand'; brand.textContent = '译';
     const title = document.createElement('div'); const heading = document.createElement('h1'); heading.textContent = 'forum-translator';
-    const subtitle = document.createElement('small'); subtitle.textContent = '翻译设置'; title.append(heading, subtitle);
+    const subtitle = document.createElement('small'); subtitle.textContent = `${isXSite() ? 'X' : 'Reddit'} 翻译设置 · 仅本站生效`; title.append(heading, subtitle);
     const dismiss = document.createElement('button'); dismiss.type = 'button'; dismiss.textContent = '×'; dismiss.setAttribute('aria-label', '关闭设置'); dismiss.onclick = () => setOpen(false);
     header.append(brand, title, dismiss); panel.append(header);
     const layout = document.createElement('div'); layout.className = 'layout'; panel.append(layout);
@@ -97,7 +97,7 @@ export function mountControls(read: () => Settings, save: (settings: Settings) =
     const theme = document.createElement('select'); theme.name = 'translationTheme';
     for (const [value, name] of Object.entries(TRANSLATION_THEMES)) { const option = document.createElement('option'); option.value = value; option.textContent = name; theme.append(option); }
     theme.value = current.translationTheme; themeLabel.append(theme); scope.append(themeLabel);
-    input('enabled', '开启本页及后续页面自动翻译', 'checkbox', current.enabled);
+    input('enabled', `开启 ${isXSite() ? 'X' : 'Reddit'} 全站自动翻译`, 'checkbox', current.enabled);
     for (const [key, label] of [['title', isXSite() ? '帖子标题' : '帖子详情及搜索结果标题'], ['body', '帖子正文'], ['comment', '评论']] as const) {
       const field = input(key, isXSite() && key === 'body' ? '推文、回复与引用推文' : label, 'checkbox', current[key]);
       if (isXSite() && key !== 'body' && field.parentElement) field.parentElement.hidden = true;
@@ -112,14 +112,17 @@ export function mountControls(read: () => Settings, save: (settings: Settings) =
     const status = document.createElement('p'); status.setAttribute('role', 'status'); footer.append(status);
     const actions = document.createElement('div'); actions.className = 'actions'; footer.append(actions);
     const submit = document.createElement('button'); submit.type = 'submit'; submit.textContent = '保存并应用'; submit.className = 'primary'; actions.append(submit);
-    const clear = document.createElement('button'); clear.type = 'button'; clear.textContent = '清除译文缓存'; clear.onclick = () => { clearCache(); status.textContent = '缓存已清除，已显示的译文保留。'; }; cache.append(clear);
+    const clear = document.createElement('button'); clear.type = 'button'; clear.textContent = '清除本站译文缓存'; clear.onclick = () => { clearCache(); status.textContent = '本站缓存已清除，已显示的译文保留。'; }; cache.append(clear);
     const close = document.createElement('button'); close.type = 'button'; close.textContent = '关闭'; close.onclick = () => setOpen(false); actions.append(close);
     panel.onsubmit = event => {
       event.preventDefault(); const next = { ...current };
       if (fontControls && !fontControls.valid()) { activate('fonts'); fontSection?.querySelector<HTMLInputElement>('input:invalid')?.reportValidity(); return; }
       next.fonts = fontControls?.read() ?? current.fonts;
       next.translationTheme = theme.value as TranslationTheme;
-      for (const name of ['enabled', 'title', 'redditFeedTitle', 'body', 'comment', 'translationOnly'] as const) next[name] = (fields.get(name) as HTMLInputElement).checked;
+      for (const name of ['enabled', 'title', 'redditFeedTitle', 'body', 'comment', 'translationOnly'] as const) {
+        const field = fields.get(name) as HTMLInputElement;
+        if (!field.parentElement?.hidden) next[name] = field.checked;
+      }
       for (const name of ['before', 'after'] as const) next[name] = Number(fields.get(name)?.value);
       for (const field of fields.values()) {
         if (!field.matches(':disabled') && !field.checkValidity()) { activate('scope'); field.reportValidity(); return; }
